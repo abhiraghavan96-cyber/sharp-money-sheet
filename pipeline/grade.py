@@ -77,7 +77,7 @@ def main():
         upd = {
             "result": res,
             "units": round(1 / be - 1, 3) if res == "W" else (-1.0 if res == "L" else 0.0),
-            "finalScore": f"{game['away'] if game else 'Away'} {away}, {game['home'] if game else 'Home'} {home}",
+            "finalScore": f"{game['away'] if game else 'Away'} {away:g}, {game['home'] if game else 'Home'} {home:g}",
             "closeLine": cl, "closeProb": None if cp is None else round(cp, 4),
             "clvProb": None if cp is None else round(cp - be, 4),
             "status": "graded",

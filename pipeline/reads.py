@@ -109,11 +109,48 @@ def rest_line(g):
             return 6, f"{g['home']} is on the second night of a back-to-back against a rested {g['away']}."
         if o == 0 and r >= 1:
             return 5, f"{g['away']} is on the second night of a back-to-back."
+        if si.get("dense") != si.get("oppDense"):
+            team = g["home"] if si.get("dense") else g["away"]
+            return 4, f"{team} is in a heavy stretch of the schedule (three games in four nights or four in six)."
         return 0, None
     if abs(r - o) >= 3:
         team, d = (g["home"], r - o) if r > o else (g["away"], o - r)
         return 4, f"{team} has {d} more days of rest."
     return 0, None
+
+
+def power_line(g):
+    pw = g.get("power")
+    if not pw:
+        return 0, None
+    sp = next((m for m in g["markets"] if m["type"] == "spread"), None)
+    tt = next((m for m in g["markets"] if m["type"] == "total"), None)
+    bits, score = [], 0
+    if sp:
+        si = next(s for s in sp["sides"] if s["key"] == "home").get("situation") or {}
+        e = si.get("powerEdge")
+        if e is not None and abs(e) >= 2 and not si.get("powerFar"):
+            fav, by = (g["home"], pw["margin"]) if pw["margin"] >= 0 else (g["away"], -pw["margin"])
+            bits.append(f"makes it {fav} by {by:.1f}, which leans {g['home'] if e > 0 else g['away']} by {abs(e):.1f} against the spread")
+            score = 5
+    if tt:
+        si = next(s for s in tt["sides"] if s["key"] == "over").get("situation") or {}
+        e, need = si.get("powerEdge"), (4 if g["league"] == "NBA" else 2)
+        if e is not None and abs(e) >= need and not si.get("powerFar"):
+            line = next(s for s in tt["sides"] if s["key"] == "over")["line"]
+            bits.append(f"projects {pw['total']:.0f} total points against a line of {line:g}")
+            score = max(score, 5)
+    if not bits:
+        return 0, None
+    return score, "Our power rating " + " and ".join(bits) + "."
+
+
+def weather_line(g):
+    wx = g.get("wx")
+    if not wx or wx.get("wind") is None or wx["wind"] < 12:
+        return 0, None
+    gust = f", gusting to {wx['gust']:.0f}" if wx.get("gust") and wx["gust"] >= wx["wind"] + 5 else ""
+    return (7 if wx["wind"] >= 15 else 4), f"Wind is forecast at {wx['wind']:.0f} mph at kickoff{gust}, which tends to hold scoring down."
 
 
 def watch(g):
@@ -138,7 +175,7 @@ def read_for(g):
         cands.append(spread_line(g, sp))
     if tt:
         cands.append(total_line(tt))
-    for f in (kalshi_line, model_line, injury_line, rest_line):
+    for f in (kalshi_line, model_line, power_line, weather_line, injury_line, rest_line):
         cands.append(f(g))
     cands = [c for c in cands if c[1]]
     cands.sort(key=lambda c: -c[0])

@@ -40,6 +40,9 @@ def main():
     tickets = (load(d, "tickets_nba.json") or []) + (load(d, "tickets_nfl.json") or [])
     ctx = load(d, "context.json") or {}
     notes = load(d, "notes.json") or {}
+    stand = load(d, "standings.json") or {}
+    wx = load(d, "weather.json") or {}
+    lg_avg = {lg: sum(t["pf"] for t in st.values()) / len(st) for lg, st in stand.items() if st}
     games, finals = [], []
     for g in espn:
         lg = g["league"]
@@ -71,6 +74,11 @@ def main():
                 break
         if ctx.get(g["id"]):
             r["ctx"] = ctx[g["id"]]
+        st = stand.get(lg) or {}
+        if st.get(g["home"]) and st.get(g["away"]):
+            r["rating"] = {"home": st[g["home"]], "away": st[g["away"]], "lgAvg": round(lg_avg[lg], 2)}
+        if wx.get(g["id"]):
+            r["wx"] = dict(wx[g["id"]], indoor=False)
         if notes.get(g["id"]):
             r["note"] = notes[g["id"]]
         games.append(r)

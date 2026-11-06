@@ -5,9 +5,13 @@ python3 fetch.py grade in_dir     -> espn.json (yesterday and today, with final 
 
 Every source is optional: a source that fails is logged and skipped, and the page shows it as missing.
 """
-import json, os, re, sys, time, urllib.request
+import json, os, re, sys, time, unicodedata, urllib.parse, urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from merge import cands  # noqa: E402  (Kalshi team-code aliases)
 
 UA = "SharpMoneySheet/1.0 (personal research project)"
 PT = ZoneInfo("America/Los_Angeles")
@@ -67,11 +71,14 @@ def espn(dates):
                 h = next(x for x in c["competitors"] if x["homeAway"] == "home")
                 a = next(x for x in c["competitors"] if x["homeAway"] == "away")
                 o = (c.get("odds") or [{}])[0]
+                v = c.get("venue") or {}
+                ad = v.get("address") or {}
                 g = {"league": lg.upper(), "date": pt_date(e["date"]), "id": e["id"], "start": iso(e["date"]),
                      "status": e["status"]["type"]["name"],
-                     "away": a["team"]["abbreviation"], "awayName": a["team"]["displayName"],
-                     "home": h["team"]["abbreviation"], "homeName": h["team"]["displayName"],
-                     "awayScore": float(a.get("score") or 0), "homeScore": float(h.get("score") or 0)}
+                     "away": a["team"]["abbreviation"], "awayName": a["team"]["displayName"], "awayId": a["team"].get("id"),
+                     "home": h["team"]["abbreviation"], "homeName": h["team"]["displayName"], "homeId": h["team"].get("id"),
+                     "awayScore": float(a.get("score") or 0), "homeScore": float(h.get("score") or 0),
+                     "indoor": v.get("indoor"), "city": ad.get("city"), "state": ad.get("state"), "country": ad.get("country")}
 
                 def q(x):
                     if not x or not x.get("close"):
@@ -105,6 +112,8 @@ def context(games):
             inj = next((t for t in s.get("injuries", []) if (t.get("team") or {}).get("abbreviation") == ab), {"injuries": []})
             st = lambda i: (i.get("status") or "").lower()
             out_ = [i["athlete"]["displayName"] for i in inj.get("injuries", []) if st(i) in ("out", "doubtful")]
+            out_ath = [(i["athlete"].get("id"), i["athlete"]["displayName"], ((i["athlete"].get("position") or {}).get("abbreviation") or ""))
+                       for i in inj.get("injuries", []) if st(i) in ("out", "doubtful")]
             qq = [i["athlete"]["displayName"] for i in inj.get("injuries", []) if st(i) == "questionable"]
             lt = next((t for t in s.get("leaders", []) if (t.get("team") or {}).get("abbreviation") == ab), {"leaders": []})
             lead = []
@@ -120,9 +129,10 @@ def context(games):
             last = dates[-1] if dates else None
             last_ev = next((e for e in l5.get("events", []) if e.get("gameDate") == last), {})
             rec = next((r.get("summary") for r in c.get("record", []) if r.get("type") == "total"), None)
-            teams[c["homeAway"]] = {"ab": ab, "rec": rec, "last": last, "lastAtVs": last_ev.get("atVs"),
+            teams[c["homeAway"]] = {"ab": ab, "rec": rec, "last": last, "lastAtVs": last_ev.get("atVs"), "recent": dates,
                                     "out": out_[:6], "q": qq[:4], "lead": lead,
                                     "coreOut": [n for n in lead if n in out_], "coreQ": [n for n in lead if n in qq]}
+            teams[c["homeAway"]].update(lost_production(lg, out_ath, lead))
         p = s.get("predictor") or {}
         pred = None
         try:
@@ -130,6 +140,286 @@ def context(games):
         except (KeyError, TypeError, ValueError):
             pass
         out[g["id"]] = {"pred": pred, "home": teams.get("home"), "away": teams.get("away")}
+    return out
+
+
+# ---------- player game logs ----------
+NBA_COLS = ["minutes", "points", "totalRebounds", "assists", "threePointFieldGoalsMade-threePointFieldGoalsAttempted"]
+NFL_COLS = ["passingYards", "rushingYards", "receivingYards", "receptions"]
+_LOGS = {}
+
+
+def season_ids(lg):
+    t = datetime.now(PT).date()
+    cur = (t.year + 1 if t.month >= 8 else t.year) if lg == "nba" else (t.year if t.month >= 3 else t.year - 1)
+    return cur, cur - 1
+
+
+def stat_num(x):
+    s = str(x if x is not None else "").replace(",", "").strip()
+    if ":" in s:
+        m, sec = s.split(":", 1)
+        try:
+            return round(int(m) + int(sec) / 60, 1)
+        except ValueError:
+            return 0
+    if "-" in s[1:]:
+        s = s.split("-")[0] if not s.startswith("-") else "-" + s[1:].split("-")[0]
+    try:
+        v = float(s)
+    except ValueError:
+        return 0
+    return int(v) if v.is_integer() else round(v, 1)
+
+
+def gamelog(lg, aid, prev=False):
+    """One player's regular-season and playoff games, newest first, as rows of NBA_COLS or NFL_COLS."""
+    key = (lg, aid, prev)
+    if key in _LOGS:
+        return _LOGS[key]
+    url = f"https://site.web.api.espn.com/apis/common/v3/sports/{SPORT[lg]}/{lg}/athletes/{aid}/gamelog"
+    if prev:
+        url += f"?season={season_ids(lg)[1]}"
+    rows = []
+    try:
+        j = get(url, tries=2)
+        names, meta = j.get("names") or [], j.get("events") or {}
+        cols = NBA_COLS if lg == "nba" else NFL_COLS
+        for stype in j.get("seasonTypes") or []:
+            dn = stype.get("displayName") or ""
+            if "Regular" not in dn and "Postseason" not in dn:
+                continue
+            for cat in stype.get("categories") or []:
+                if cat.get("type") not in (None, "event"):
+                    continue
+                for ev in cat.get("events") or []:
+                    stats = ev.get("stats") or []
+                    if len(stats) != len(names):
+                        continue
+                    d = dict(zip(names, stats))
+                    rows.append(((meta.get(ev.get("eventId")) or {}).get("gameDate") or "", [stat_num(d.get(c)) for c in cols]))
+    except Exception as e:  # noqa: BLE001
+        print("espn gamelog failed", lg, aid, prev, e)
+    rows.sort(key=lambda r: r[0], reverse=True)
+    out = [r[1] for r in rows]
+    _LOGS[key] = out
+    return out
+
+
+def lost_production(lg, out_ath, lead):
+    """How much of a team is missing. NBA: points per game of players listed out or doubtful.
+    NFL: 1.0 for the starting QB (the team's passing leader), 0.35 for other team leaders, 0.05 for anyone else."""
+    if lg == "nfl":
+        units, detail = 0.0, []
+        for _, name, pos in out_ath:
+            u = 1.0 if (pos == "QB" and name in lead) else 0.35 if name in lead else 0.05
+            units += u
+            if u >= 0.35:
+                detail.append([name, pos])
+        return {"lostUnits": round(units, 2), "lostDetail": detail[:4]}
+    total, detail = 0.0, []
+    for aid, name, _ in out_ath:
+        if not aid:
+            continue
+        rows = gamelog(lg, aid)
+        if len(rows) < 3:
+            rows = rows + gamelog(lg, aid, prev=True)[:20]
+        if not rows:
+            continue
+        ppg = sum(r[1] for r in rows) / len(rows)
+        total += ppg
+        if ppg >= 5:
+            detail.append([name, round(ppg, 1)])
+    detail.sort(key=lambda x: -x[1])
+    return {"lostPts": round(total, 1), "lostDetail": detail[:4]}
+
+
+def standings(lg):
+    """Season points for and against per game, by team abbreviation."""
+    try:
+        j = get(f"https://site.api.espn.com/apis/v2/sports/{SPORT[lg]}/{lg}/standings")
+    except Exception as e:  # noqa: BLE001
+        print("espn standings failed", lg, e)
+        return {}
+    out = {}
+
+    def walk(o):
+        for ch in o.get("children") or []:
+            walk(ch)
+        for e in (o.get("standings") or {}).get("entries") or []:
+            st = {s.get("name"): s.get("value") for s in e.get("stats", [])}
+            gp = sum(int(st.get(k) or 0) for k in ("wins", "losses", "ties"))
+            if not gp:
+                continue
+            pf = st.get("avgPointsFor") if st.get("avgPointsFor") is not None else (st.get("pointsFor") or 0) / gp
+            pa = st.get("avgPointsAgainst") if st.get("avgPointsAgainst") is not None else (st.get("pointsAgainst") or 0) / gp
+            out[e["team"]["abbreviation"]] = {"gp": gp, "pf": round(float(pf), 2), "pa": round(float(pa), 2)}
+    walk(j)
+    return out
+
+
+# ---------- player props (Kalshi ladders + ESPN game logs) ----------
+PROP_SERIES = {"nba": {"pts": "KXNBAPTS", "reb": "KXNBAREB", "ast": "KXNBAAST", "tpm": "KXNBA3PT", "pra": "KXNBAPRA"},
+               "nfl": {"passYds": "KXNFLPASSYDS", "rushYds": "KXNFLRSHYDS", "recYds": "KXNFLRECYDS", "rec": "KXNFLREC"}}
+
+
+def norm_name(s):
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower().replace("-", " ")
+    parts = [p for p in re.sub(r"[^a-z ]", "", s).split() if p not in ("jr", "sr", "ii", "iii", "iv", "v")]
+    return " ".join(parts)
+
+
+def roster(lg, tid):
+    try:
+        j = get(f"https://site.api.espn.com/apis/site/v2/sports/{SPORT[lg]}/{lg}/teams/{tid}/roster", tries=2)
+    except Exception as e:  # noqa: BLE001
+        print("espn roster failed", lg, tid, e)
+        return []
+    out = []
+    for a in j.get("athletes") or []:
+        for x in (a.get("items") if "items" in a else [a]):
+            inj = x.get("injuries") or []
+            out.append({"id": x.get("id"), "name": x.get("displayName") or x.get("fullName") or "",
+                        "jersey": str(x.get("jersey") or ""), "pos": (x.get("position") or {}).get("abbreviation"),
+                        "status": inj[0].get("status") if inj else None})
+    return out
+
+
+def match_player(name, ros, pcode):
+    n = norm_name(name)
+    hit = [r for r in ros if norm_name(r["name"]) == n]
+    if not hit and n:
+        last = n.split()[-1]
+        hit = [r for r in ros if norm_name(r["name"]).split()[-1:] == [last]]
+        if len(hit) > 1:
+            jersey = re.sub(r"^\D+", "", pcode)
+            hit = [r for r in hit if r["jersey"] == jersey] or [r for r in hit if norm_name(r["name"])[:1] == n[:1]]
+    return hit[0] if len(hit) == 1 else None
+
+
+def kalshi_markets(series):
+    out, cursor = [], ""
+    for _ in range(6):
+        url = KALSHI.format(s=series) + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else "")
+        j = get(url, tries=2)
+        ms = j.get("markets", [])
+        out += ms
+        cursor = j.get("cursor") or ""
+        if not cursor or len(ms) < 1000:
+            break
+    return out
+
+
+def kalshi_props(lg, codes):
+    """{(event key, player code): {"name", "ladders": {stat: [[strike, bid, ask], ...]}}}; strike x means 'more than x'."""
+    res = {}
+    for stat, series in PROP_SERIES[lg].items():
+        try:
+            ms = kalshi_markets(series)
+        except Exception as e:  # noqa: BLE001
+            print("kalshi props failed", series, e)
+            continue
+        n = 0
+        for m in ms:
+            ev = m.get("event_ticker", "")
+            code = next((c for c in codes if f"-{c}" in ev), None)
+            parts = m.get("ticker", "").split("-")
+            if not code or len(parts) < 4 or m.get("floor_strike") is None:
+                continue
+            try:
+                b, a = float(m["yes_bid_dollars"]), float(m["yes_ask_dollars"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            key = ev.split("-")[1][len(code):]
+            name = (m.get("yes_sub_title") or m.get("title") or "").split(":")[0].strip()
+            r = res.setdefault((key, parts[2]), {"name": name, "ladders": {}})
+            r["ladders"].setdefault(stat, []).append([m["floor_strike"], b, a])
+            n += 1
+        print("kalshi props", series, n)
+    for r in res.values():
+        for q in r["ladders"].values():
+            q.sort()
+    return res
+
+
+def props(games, codes, stand):
+    """Players with Kalshi prop markets in tonight's and tomorrow's games, with their game logs."""
+    players, rosters = [], {}
+    for lg in ("nba", "nfl"):
+        LG = lg.upper()
+        sched = [g for g in games if g["league"] == LG and g["status"] == "STATUS_SCHEDULED"]
+        if not sched:
+            continue
+        for (key, pcode), info in kalshi_props(lg, codes).items():
+            g = next((x for x in sched if any(a + h == key for a in cands(LG, x["away"]) for h in cands(LG, x["home"]))), None)
+            if not g:
+                continue
+            side, best = None, 0
+            for s in ("away", "home"):
+                for c in cands(LG, g[s]):
+                    if pcode.startswith(c) and len(c) > best:
+                        side, best = s, len(c)
+            if not side or not g.get(side + "Id"):
+                continue
+            tid = g[side + "Id"]
+            if tid not in rosters:
+                rosters[tid] = roster(lg, tid)
+            ath = match_player(info["name"], rosters[tid], pcode)
+            if not ath:
+                print("prop player not matched", LG, info["name"], pcode)
+                continue
+            other = "home" if side == "away" else "away"
+            players.append({"id": ath["id"], "name": ath["name"], "lg": LG, "team": g[side], "opp": g[other],
+                            "home": side == "home", "gameId": g["id"], "date": g["date"], "start": g["start"],
+                            "pos": ath["pos"], "status": ath["status"], "ladders": info["ladders"]})
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        cur = list(ex.map(lambda p: gamelog(p["lg"].lower(), p["id"]), players))
+        prev = list(ex.map(lambda p: gamelog(p["lg"].lower(), p["id"], prev=True), players))
+    for p, c, pv in zip(players, cur, prev):
+        p["cur"], p["prev"] = c, pv[:60]
+    players = [p for p in players if p["cur"] or p["prev"]]
+    lg_avg = {LG: round(sum(t["pf"] for t in st.values()) / len(st), 2) for LG, st in stand.items() if st}
+    return {"cols": {"NBA": ["min", "pts", "reb", "ast", "tpm"], "NFL": ["passYds", "rushYds", "recYds", "rec"]},
+            "players": players, "teams": stand, "lgAvg": lg_avg}
+
+
+# ---------- weather for outdoor NFL games (Open-Meteo, free, no key) ----------
+STATES = {"AL": "Alabama", "AZ": "Arizona", "CA": "California", "CO": "Colorado", "FL": "Florida", "GA": "Georgia",
+          "IL": "Illinois", "IN": "Indiana", "LA": "Louisiana", "MA": "Massachusetts", "MD": "Maryland", "MI": "Michigan",
+          "MN": "Minnesota", "MO": "Missouri", "NC": "North Carolina", "NJ": "New Jersey", "NV": "Nevada", "NY": "New York",
+          "OH": "Ohio", "PA": "Pennsylvania", "TN": "Tennessee", "TX": "Texas", "WA": "Washington", "WI": "Wisconsin",
+          "DC": "District of Columbia", "VA": "Virginia", "UT": "Utah", "OR": "Oregon", "KY": "Kentucky", "SC": "South Carolina"}
+
+
+def weather(games):
+    geo, out = {}, {}
+    for g in games:
+        if g["league"] != "NFL" or g.get("indoor") is not False or g["status"] != "STATUS_SCHEDULED" or not g.get("city"):
+            continue
+        try:
+            k = (g["city"], g.get("state"))
+            if k not in geo:
+                us = (g.get("country") or "USA") in ("USA", "US", "United States")
+                j = get("https://geocoding-api.open-meteo.com/v1/search?count=10&name=" + urllib.parse.quote(g["city"]) + ("&country=US" if us else ""))
+                res = j.get("results") or []
+                want = STATES.get(g.get("state") or "", "").lower()
+                pick = next((r for r in res if want and (r.get("admin1") or "").lower() == want), res[0] if res else None)
+                geo[k] = (pick["latitude"], pick["longitude"]) if pick else None
+            if not geo[k]:
+                continue
+            lat, lon = geo[k]
+            f = get(f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+                    "&hourly=wind_speed_10m,wind_gusts_10m,precipitation_probability,temperature_2m"
+                    "&wind_speed_unit=mph&temperature_unit=fahrenheit&timezone=UTC&forecast_days=16")
+            h = f.get("hourly") or {}
+            t = g["start"][:13] + ":00"
+            if t not in (h.get("time") or []):
+                continue
+            i = h["time"].index(t)
+            out[g["id"]] = {"wind": h["wind_speed_10m"][i], "gust": h["wind_gusts_10m"][i],
+                            "precip": h["precipitation_probability"][i], "temp": h["temperature_2m"][i]}
+        except Exception as e:  # noqa: BLE001
+            print("weather failed", g["id"], e)
     return out
 
 
@@ -245,6 +535,18 @@ def main():
         t = tickets(lg, [x.strftime("%Y%m%d") for x in days])
         json.dump(t, open(os.path.join(d, f"tickets_{lg}.json"), "w"))
         print("tickets", lg, len(t))
+    stand = {lg.upper(): standings(lg) for lg in ("nba", "nfl")}
+    json.dump(stand, open(os.path.join(d, "standings.json"), "w"))
+    print("standings", {k: len(v) for k, v in stand.items()})
+    wx = weather(games)
+    json.dump(wx, open(os.path.join(d, "weather.json"), "w"))
+    print("weather games", len(wx))
+    try:
+        pr = props(games, codes, stand)
+        json.dump(pr, open(os.path.join(d, "props.json"), "w"), separators=(",", ":"))
+        print("prop players", len(pr["players"]), {LG: sum(1 for p in pr["players"] if p["lg"] == LG) for LG in ("NBA", "NFL")})
+    except Exception as e:  # noqa: BLE001
+        print("props failed", e)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ python3 pipeline/run.py refresh   # pull lines, prices, bets and context; score;
 python3 pipeline/run.py grade     # pull final scores; grade open picks; update data.json
 Run from the repository root. Uses only the Python standard library.
 """
-import os, shutil, subprocess, sys
+import json, os, shutil, subprocess, sys
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +38,14 @@ def main():
         py("score.py", w("raw.json"), w("out"), "--prev", w("state"))
         py("reads.py", w("out", "slates"))
         py("pack.py", "pack", w("state"), w("out"), w("none"), data, now)
+        src = w("in", "props.json")
+        if os.path.exists(src):  # players, Kalshi prop ladders and team ratings for the Test-a-bet tab
+            with open(src) as f:
+                pr = json.load(f)
+            pr["updatedAt"] = now
+            with open(os.path.join(ROOT, "props.json"), "w") as f:
+                json.dump(pr, f, separators=(",", ":"))
+            print("props.json", len(pr.get("players", [])), "players")
 
 
 if __name__ == "__main__":

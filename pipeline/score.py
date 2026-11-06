@@ -143,11 +143,68 @@ def pt_date(iso):
     return d.date()
 
 
+HCA = {"NBA": 2.0, "NFL": 1.5}              # home-court / home-field points
+SHRINK = {"NBA": 10, "NFL": 4}             # games of evidence before a team's season numbers count half
+# power-rating edge (points): credit starts, full credit, and "too far, probably news"
+POWER_SPREAD = {"NBA": (1.0, 5.0, 9.0), "NFL": (0.5, 3.5, 8.0)}
+POWER_TOTAL = {"NBA": (2.0, 8.0, 16.0), "NFL": (1.0, 5.0, 10.0)}
+
+
+def power(g):
+    """Our own projection from season points for and against, shrunk toward average early in the season."""
+    r = g.get("rating")
+    if not r or not r.get("home") or not r.get("away") or not r.get("lgAvg"):
+        return None
+    lg, avg = g["league"], r["lgAvg"]
+
+    def adj(t):
+        w = t["gp"] / (t["gp"] + SHRINK[lg])
+        return (t["pf"] - avg) * w, (t["pa"] - avg) * w
+    ho, hd = adj(r["home"])
+    ao, ad = adj(r["away"])
+    return {"margin": round(ho + ad - ao - hd + HCA[lg], 1), "total": round(2 * avg + ho + ad + ao + hd, 1)}
+
+
+def ramp(x, lo, hi):
+    return clamp((x - lo) / (hi - lo)) if x > lo else 0.0
+
+
+def recent_games(ctx_team, gd, days):
+    """Games a team played in the `days` days before game day gd."""
+    return sum(1 for d in (ctx_team.get("recent") or []) if 1 <= (gd - pt_date(d)).days <= days)
+
+
 def situation(g, mtype, key):
-    """Rest, health, ESPN model and analyst lean for one side. Returns (signals, available points, info)."""
+    """ESPN model, power rating, rest, health, wind and analyst lean for one side. Returns (signals, available points, info)."""
     from statistics import NormalDist
     ctx, note = g.get("ctx"), g.get("note")
     sig, avail, info = {}, 0, {}
+    lg = g["league"]
+    pw = power(g)
+    if pw and mtype == "spread":
+        market_home = -g["spread"]["home"][2]
+        edge_home = pw["margin"] - market_home
+        edge = edge_home if key == "home" else -edge_home
+        lo, hi, far = POWER_SPREAD[lg]
+        info["powerMargin"] = pw["margin"] if key == "home" else -pw["margin"]
+        info["powerEdge"] = round(edge, 1)
+        info["powerFar"] = abs(edge_home) > far
+        avail += 15
+        sig["power"] = 0.0 if info["powerFar"] else round(ramp(edge, lo, hi) * 15, 1)
+    if pw and mtype == "total":
+        e_over = pw["total"] - g["total"]["over"][2]
+        edge = e_over if key == "over" else -e_over
+        lo, hi, far = POWER_TOTAL[lg]
+        info["powerTotal"] = pw["total"]
+        info["powerEdge"] = round(edge, 1)
+        info["powerFar"] = abs(e_over) > far
+        avail += 15
+        sig["power"] = 0.0 if info["powerFar"] else round(ramp(edge, lo, hi) * 15, 1)
+    wx = g.get("wx")
+    if mtype == "total" and lg == "NFL" and wx and wx.get("wind") is not None:
+        info["wind"], info["gust"] = wx["wind"], wx.get("gust")
+        avail += 10
+        sig["weather"] = round(ramp(wx["wind"], 10, 20) * 10, 1) if key == "under" else 0.0
     if mtype == "spread" and ctx and ctx.get("home") and ctx.get("away"):
         other = "home" if key == "away" else "away"
         gd = pt_date(g["start"])
@@ -160,15 +217,33 @@ def situation(g, mtype, key):
         if rest[key] is not None and rest[other] is not None:
             avail += 10
             diff = rest[key] - rest[other]
-            if g["league"] == "NBA":
-                pts = 10 if (rest[other] == 0 and rest[key] >= 1) else 0
+            if lg == "NBA":
+                # second night of a back-to-back, or a third game in four nights / fourth in six
+                dense = {k: recent_games(ctx[k], gd, 3) >= 2 or recent_games(ctx[k], gd, 5) >= 3 for k in ("home", "away")}
+                info["dense"], info["oppDense"] = dense[key], dense[other]
+                if rest[other] == 0 and rest[key] >= 1:
+                    pts = 10
+                elif dense[other] and not dense[key] and rest[key] >= 1:
+                    pts = 6
+                else:
+                    pts = 0
             else:
                 pts = round(clamp((diff - 2) / 5) * 10, 1) if diff > 2 else 0
             sig["rest"] = pts
-        mine, theirs = len(ctx[key].get("out", [])), len(ctx[other].get("out", []))
         info["out"], info["oppOut"] = ctx[key].get("out", []), ctx[other].get("out", [])
         avail += 10
-        sig["health"] = round(clamp((theirs - mine) / 3) * 10, 1) if theirs > mine else 0.0
+        if lg == "NBA" and ctx[key].get("lostPts") is not None and ctx[other].get("lostPts") is not None:
+            team_pts = lambda k: ((g.get("rating") or {}).get(k) or {}).get("pf") or 112.0
+            mine, theirs = ctx[key]["lostPts"] / team_pts(key), ctx[other]["lostPts"] / team_pts(other)
+            info["lost"], info["oppLost"] = round(mine, 3), round(theirs, 3)
+            sig["health"] = round(clamp((theirs - mine) / 0.20) * 10, 1) if theirs > mine else 0.0
+        elif lg == "NFL" and ctx[key].get("lostUnits") is not None and ctx[other].get("lostUnits") is not None:
+            mine, theirs = ctx[key]["lostUnits"], ctx[other]["lostUnits"]
+            info["lost"], info["oppLost"] = mine, theirs
+            sig["health"] = round(clamp((theirs - mine) / 1.0) * 10, 1) if theirs > mine else 0.0
+        else:
+            mine, theirs = len(ctx[key].get("out", [])), len(ctx[other].get("out", []))
+            sig["health"] = round(clamp((theirs - mine) / 3) * 10, 1) if theirs > mine else 0.0
         pred = ctx.get("pred")
         if pred and pred.get("home") and 0 < pred["home"] < 100:
             p = pred["home"] / 100
@@ -233,6 +308,9 @@ def build(raw, prev=None):
         game["kalshi"] = {"spread": g.get("kSpread"), "total": g.get("kTotal")}
         game["ctx"] = g.get("ctx")
         game["note"] = g.get("note")
+        game["power"] = power(g)
+        game["rating"] = g.get("rating")
+        game["wx"] = g.get("wx")
         game["hasLines"] = bool(mk)
         game["hasTickets"] = bool(g.get("tickets"))
         game["bets"] = (g.get("tickets") or {}).get("bets")
