@@ -3,7 +3,7 @@
 python3 pack.py unpack data.json state/
     -> state/slates/<date>.json, state/picks/<id>.json
 python3 pack.py pack state/ out/ gradeout/ data.json CAPTURED_AT_ISO
-    -> data.json with slates from out/ replacing state/, new picks from out/,
+    -> data.json with slates from out/ replacing state/, new picks from out/, limit-order fill updates from out/pickupd/ and
        grading updates from gradeout/ merged in, slates older than 21 days dropped
 (Pass a folder that doesn't exist for out/ or gradeout/ when a run has none.)
 """
@@ -34,6 +34,9 @@ def pack(state, out, gradeout, dst, now):
     picks = read_dir(os.path.join(state, "picks"))
     for k, v in read_dir(os.path.join(out, "picks")).items():
         picks.setdefault(k, v)
+    for k, v in read_dir(os.path.join(out, "pickupd")).items():  # paper Kalshi limit orders that filled or expired
+        if k in picks:
+            picks[k] = dict(picks[k], **v)
     for k, v in read_dir(os.path.join(gradeout, "picks")).items():
         if k in picks:
             picks[k] = dict(picks[k], **v)

@@ -10,6 +10,7 @@ STEAM = {"NBA": {"spread": 2.0, "total": 3.0}, "NFL": {"spread": 1.5, "total": 2
 NEWS_MULT = 2.5          # a move bigger than 2.5 steam moves is treated as news (injury, QB change)
 KALSHI_MAX_WIDTH = 0.04  # ignore Kalshi quotes wider than 4 cents
 FEE_RATE = 0.07          # assumed Kalshi taker fee: 0.07 * p * (1 - p) per contract
+MAKER_RATE = 0.0175      # Kalshi maker fee on NFL/NBA game markets: 0.0175 * p * (1 - p) per contract (a quarter of the taker fee)
 BEST_MIN, PICK_MIN = 60, 50
 
 
@@ -121,8 +122,8 @@ def side_eval(g, mtype, key, other):
     news = abs(toward) > NEWS_MULT * steam
 
     # Kalshi
-    kp = kcost = kfee = kbe = None
-    liquid = False
+    kp = kcost = kfee = kbe = kbid = kstrike = None
+    liquid = exact = False
     if mtype == "spread" and g.get("kSpread"):
         fav = g["kSpread"]["fav"]
         fav_line = abs(m[fav][2])
@@ -130,22 +131,30 @@ def side_eval(g, mtype, key, other):
         if r:
             mid, b, a, w = r
             liquid = w <= KALSHI_MAX_WIDTH + 1e-9
+            kstrike, exact = fav_line, any(abs(q[0] - fav_line) < 1e-9 for q in g["kSpread"]["q"])
             if key == fav:
-                kp, kcost = mid, a
+                kp, kcost, kbid = mid, a, b
             else:
-                kp, kcost = 1 - mid, 1 - b
+                kp, kcost, kbid = 1 - mid, 1 - b, 1 - a
     if mtype == "total" and g.get("kTotal"):
         r = interp(g["kTotal"], line)
         if r:
             mid, b, a, w = r
             liquid = w <= KALSHI_MAX_WIDTH + 1e-9
+            kstrike, exact = line, any(abs(q[0] - line) < 1e-9 for q in g["kTotal"])
             if key == "over":
-                kp, kcost = mid, a
+                kp, kcost, kbid = mid, a, b
             else:
-                kp, kcost = 1 - mid, 1 - b
+                kp, kcost, kbid = 1 - mid, 1 - b, 1 - a
     if kcost is not None:
         kfee = FEE_RATE * kcost * (1 - kcost)
         kbe = kcost + kfee
+    maker = None
+    if kbid is not None and exact and kbid >= 0.02:
+        lim = round(kbid + 0.01, 2) if kbid + 0.01 < kcost - 1e-9 else round(kbid, 2)   # improve the best bid by a cent, or join it
+        mfee = MAKER_RATE * lim * (1 - lim)
+        maker = {"limit": lim, "fee": round(mfee, 4), "breakEven": round(lim + mfee, 4), "strike": kstrike,
+                 "favTeam": g[g["kSpread"]["fav"]] if mtype == "spread" else None}
     cons = consensus(g, mtype, key, other, line)
     fair = cons["prob"] if cons else dk_fair      # the books' consensus is the fair price when available
     gap = (kp - fair) if kp is not None else None
@@ -188,7 +197,7 @@ def side_eval(g, mtype, key, other):
         "kalshiFee": None if kfee is None else round(kfee, 4),
         "kalshiBreakEven": None if kbe is None else round(kbe, 4),
         "kalshiLiquid": liquid, "kalshiGap": None if gap is None else round(gap, 4),
-        "consensus": cons,
+        "consensus": cons, "kalshiMaker": maker,
         "bestVenue": venue,
         "tickets": tickets, "move": toward, "newsMove": news,
         "signals": dict(sig, **sit), "availMax": avail, "marketScore": market_score,
@@ -326,6 +335,64 @@ def situation(g, mtype, key):
     return sig, avail, info
 
 
+SD_TOTAL = {"NBA": 18.0, "NFL": 13.5}
+
+
+def model_probs(g, sp, tt):
+    """Chance the home side covers / the over hits, from each source and from the app's blend
+    (the same blend the Test-a-bet simulation uses: 60% books' consensus, 25% ESPN model, 15% power rating; totals 80/20)."""
+    from statistics import NormalDist
+    N = NormalDist()
+    lg, out = g["league"], {}
+    if sp:
+        h = next(x for x in sp["sides"] if x["key"] == "home")
+        L, si, c, sd = h["line"], h.get("situation") or {}, h.get("consensus"), SD_MARGIN[lg]
+        cover = lambda mu: N.cdf((mu + L) / sd)
+        mk = sd * N.inv_cdf(clamp(c["prob"] if c else h["dkFair"], 0.01, 0.99)) - L     # the market's implied margin (DraftKings alone when no consensus)
+        parts, src = [(0.6, mk)], {"line": L, "cons": c["prob"] if c else None, "dk": h["dkFair"],
+                                   "kalshi": h.get("kalshiProb") if h.get("kalshiLiquid") else None}
+        if si.get("modelMargin") is not None:
+            src["espn"] = round(cover(si["modelMargin"]), 4)
+            if not si.get("modelFar"):
+                parts.append((0.25, si["modelMargin"]))
+        if si.get("powerMargin") is not None:
+            src["power"] = round(cover(si["powerMargin"]), 4)
+            if si.get("powerFar") is False:
+                parts.append((0.15, si["powerMargin"]))
+        src["blend"] = round(cover(sum(w * x for w, x in parts) / sum(w for w, _ in parts)), 4)
+        out["spread"] = src
+    if tt:
+        o = next(x for x in tt["sides"] if x["key"] == "over")
+        L, si, c, sd = o["line"], o.get("situation") or {}, o.get("consensus"), SD_TOTAL[lg]
+        over = lambda mu: N.cdf((mu - L) / sd)
+        mk = L + sd * N.inv_cdf(clamp(c["prob"] if c else o["dkFair"], 0.01, 0.99))
+        parts, src = [(0.8, mk)], {"line": L, "cons": c["prob"] if c else None, "dk": o["dkFair"],
+                                   "kalshi": o.get("kalshiProb") if o.get("kalshiLiquid") else None}
+        if si.get("powerTotal") is not None:
+            src["power"] = round(over(si["powerTotal"]), 4)
+            if si.get("powerFar") is False:
+                parts.append((0.2, si["powerTotal"]))
+        src["blend"] = round(over(sum(w * x for w, x in parts) / sum(w for w, _ in parts)), 4)
+        out["total"] = src
+    return out
+
+
+def kalshi_side_quote(g, mtype, key, mk):
+    """(bid, ask) for one side at a limit order's strike in this snapshot, or None."""
+    if mtype == "spread":
+        ks = g.get("kSpread")
+        if not ks or g.get(ks["fav"]) != mk.get("favTeam"):
+            return None
+        q, yes = ks["q"], key == ks["fav"]
+    else:
+        q, yes = g.get("kTotal"), key == "over"
+    row = next((x for x in (q or []) if abs(x[0] - mk["strike"]) < 1e-9), None)
+    if not row:
+        return None
+    _, b, a = row
+    return (b, a) if yes else (1 - a, 1 - b)
+
+
 def market_eval(g, mtype):
     if not g.get(mtype):
         return None
@@ -365,7 +432,14 @@ def build(raw, prev=None):
         if g["start"] < cutoff and g["date"] not in prev["slates"]:
             continue  # finished before this run and never tracked: leave it out
         mk = [m for m in (market_eval(g, "spread"), market_eval(g, "total")) if m]
+        probs = model_probs(g, next((m for m in mk if m["type"] == "spread"), None), next((m for m in mk if m["type"] == "total"), None))
+        for m in mk:
+            pr = probs.get(m["type"])
+            for sd in m["sides"]:
+                sd["modelProb"] = None if not pr else (pr["blend"] if sd["key"] in ("home", "over") else round(1 - pr["blend"], 4))
         game = {k: g[k] for k in ("league", "id", "start", "away", "awayName", "home", "homeName")}
+        game["probs"] = probs
+        game["asOf"] = now   # when this snapshot of the game was taken (a frozen game keeps its last pre-game time)
         game["markets"] = mk
         game["kalshi"] = {"spread": g.get("kSpread"), "total": g.get("kTotal")}
         game["ctx"] = g.get("ctx")
@@ -416,6 +490,9 @@ def build(raw, prev=None):
                 "matchup": f"{game['away']} @ {game['home']}", "market": m["type"], "side": s["key"],
                 "label": s["label"], "line": s["line"], "price": price, "score": sc,
                 "signals": s["signals"], "isBest": is_best, "flaggedAt": now, "status": "open",
+                "modelProb": s.get("modelProb"), "consProb": (s.get("consensus") or {}).get("prob") or s["dkFair"],
+                "maker": (dict(s["kalshiMaker"], status="posted", postedAt=now)   # only worth posting when it beats taking the best price
+                          if s.get("kalshiMaker") and s["kalshiMaker"]["breakEven"] < price["breakEven"] - 1e-9 else None),
                 "closeLine": None, "closeProb": None, "clvPoints": None, "clvProb": None,
                 "result": None, "units": None, "finalScore": None,
             }})
@@ -425,7 +502,25 @@ def build(raw, prev=None):
             "sources": raw["sources"],
             "notes": [],
         }
-    return slates, picks
+    return slates, picks, maker_updates(raw, prev.get("picks") or {}, now)
+
+
+def maker_updates(raw, picks, now):
+    """Paper limit orders on Kalshi: a posted order fills only if a later snapshot shows the market's ask at or below
+    our price (the market came to us); an order still unfilled at tip-off is cancelled."""
+    games, upd = {g["id"]: g for g in raw["games"]}, {}
+    for pid, p in picks.items():
+        mk = p.get("maker")
+        if not mk or mk.get("status") != "posted":
+            continue
+        if p["start"] <= now:
+            upd[pid] = {"maker": dict(mk, status="expired")}
+            continue
+        g = games.get(p["gameId"])
+        q = kalshi_side_quote(g, p["market"], p["side"], mk) if g else None
+        if q and q[1] <= mk["limit"] + 1e-9:
+            upd[pid] = {"maker": dict(mk, status="filled", filledAt=now)}
+    return upd
 
 
 def main():
@@ -441,9 +536,14 @@ def main():
         pkd = os.path.join(pd, "picks")
         if os.path.isdir(pkd):
             prev["pick_ids"] = {f[:-5] for f in os.listdir(pkd)}
-    slates, picks = build(raw, prev)
-    for sub in ("slates", "picks", "meta"):
+            prev["picks"] = {f[:-5]: json.load(open(os.path.join(pkd, f))) for f in os.listdir(pkd) if f.endswith(".json")}
+    slates, picks, pupd = build(raw, prev)
+    for sub in ("slates", "picks", "meta", "pickupd"):
         os.makedirs(os.path.join(out, sub), exist_ok=True)
+    for k, v in pupd.items():
+        json.dump(v, open(os.path.join(out, "pickupd", f"{k}.json"), "w"))
+    if pupd:
+        print("limit orders", {k: v["maker"]["status"] for k, v in pupd.items()})
     for d, s in slates.items():
         json.dump(s, open(os.path.join(out, "slates", f"{d}.json"), "w"))
     for p in picks:
