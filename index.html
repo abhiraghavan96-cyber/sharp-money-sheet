@@ -236,7 +236,8 @@ function pickDate() {
   if (!dates.length) return null;
   if (state.date && state.data.slates[state.date]) return state.date;
   const t = todayPT();
-  return dates.find(d => d >= t) || dates[dates.length - 1];
+  const now = Date.now(), ahead = dates.filter(d => d >= t);
+  return ahead.find(d => (state.data.slates[d].games || []).some(g => Date.parse(g.start) > now)) || ahead[0] || dates[dates.length - 1];
 }
 function renderSlate() {
   const date = pickDate();
