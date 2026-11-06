@@ -467,7 +467,7 @@ function renderMethod() {
       <div><span class="w sit">10</span><span class="t">Wind</span><span class="d">Outdoor NFL games only. Kickoff wind forecast from Open-Meteo; credit to the under from 10 mph, full at 20.</span></div>
     </div>
     <h3 style="font-size:20px">Test a bet</h3>
-    <p>Ask about any side, total or player prop on the board, like "Luka 45+ points" or "Lakers -3.5". The sheet simulates the game 10,000 times and reports how many of every 100 the bet wins. Game lines draw the margin or total from a bell curve centered on the market, nudged by ESPN's model and the power rating. Player props replay the player's own games, weighted toward this season, scaled to tonight's minutes, matchup and missing teammates. The price comes from Kalshi's ladder for that line, or from odds you type, like "at +150".</p>
+    <p>Ask about any side, total or player prop on the board, like "Luka 45+ points" or "Lakers -3.5". The sheet simulates the game 10,000 times and reports how many of every 100 the bet wins. Game lines draw the margin or total from a bell curve centered on the market, nudged by ESPN's model and the power rating. Player props replay the player's own games, with last season as a prior worth about seven of this season's games, scaled to tonight's minutes, matchup and missing teammates. The price comes from Kalshi's ladder for that line, or from odds you type, like "at +150".</p>
     <p>Props get their own score out of 100: value against the price (40), recent form against the line (15), matchup (15), role and minutes (15) and rest (10). A simulation only restates the model's chance; it doesn't prove an edge, and props aren't logged in the record yet.</p>
     <h3 style="font-size:20px">Team chemistry</h3>
     <p>The strongest research is a 2019 <i>Nature Human Behaviour</i> study from Northwestern. Teams whose players had won together before beat what their talent alone predicted, adding 2 to 7 points of prediction accuracy across the NBA, Premier League, MLB and cricket. The effect was largest in cricket and baseball. The sheet doesn't score chemistry directly yet: that needs lineup history. For now the health edge and the analyst read stand in for it, and a proper shared-minutes chemistry score is on the roadmap.</p>
@@ -495,6 +495,7 @@ const STAT_RX = [
   [/(\b(three[\s-]?pointers?|threes|treys?|3pm)\b|\b3[\s-]?pointers?\b|\b3s\b)/, "tpm"],
   [/\bpass(ing)?\s*(yards?|yds)\b/, "passYds"], [/\brush(ing)?\s*(yards?|yds)\b/, "rushYds"],
   [/\brec(eiving)?\s*(yards?|yds)\b/, "recYds"], [/\b(receptions?|catches|recs)\b/, "rec"],
+  [/\b(blocks?|blk|steals?|stl|turnovers?|double[\s-]?doubles?|triple[\s-]?doubles?|touchdowns?|tds?|interceptions?|ints?|sacks?|completions?|attempts?|fantasy)\b/, "unsupported"],
   [/\b(rebounds?|rebs?|boards?)\b/, "reb"], [/\b(assists?|asts?|dimes)\b/, "ast"], [/\b(points?|pts?)\b/, "pts"], [/\b(yards?|yds)\b/, "yds"]
 ];
 const NICK = { steph: "stephen curry", kd: "kevin durant", sga: "shai gilgeous-alexander", ant: "anthony edwards", ad: "anthony davis", cmc: "christian mccaffrey", lebron: "lebron james", giannis: "giannis antetokounmpo", jokic: "nikola jokic", wemby: "victor wembanyama" };
@@ -527,12 +528,12 @@ function ladderAt(q, x) {
   }
   return null;
 }
-async function loadProps() {
-  if (state.props || state.propsLoading) return;
-  state.propsLoading = true;
-  try { const r = await fetch("props.json", { cache: "no-store" }); if (!r.ok) throw new Error("status " + r.status); state.props = await r.json(); }
-  catch (e) { state.props = { players: [], teams: {}, lgAvg: {} }; state.propsErr = e.message || "unavailable"; }
-  state.propsLoading = false;
+function loadProps() {
+  if (!state.propsP) state.propsP = (async () => {
+    try { const r = await fetch("props.json", { cache: "no-store" }); if (!r.ok) throw new Error("status " + r.status); state.props = await r.json(); }
+    catch (e) { state.props = { players: [], teams: {}, lgAvg: {} }; state.propsErr = e.message || "unavailable"; }
+  })();
+  return state.propsP;
 }
 function upcomingGames() {
   const now = Date.now(), out = [];
@@ -583,6 +584,7 @@ function parseBet(q) {
   const pl = playerHits(txt);
   const num = (rx) => { const r = txt.match(rx); return r ? parseFloat(r[1]) : null; };
   if (stat || (pl.length && !teamHits(txt, raw, games).length)) {
+    if (stat === "unsupported") return { error: "unsupported", q: raw };
     if (!pl.length) return { error: "player", q: raw };
     if (pl.length > 1) return { error: "ambiguous", q: raw, options: pl.map(x => x.p) };
     const p = pl[0].p;
@@ -711,7 +713,8 @@ function simProp(bet) {
   const P = state.props, p = bet.p, stat = bet.stat, nba = p.lg === "NBA", R = rng(bet.q + "|" + p.id + stat);
   const IDX = nba ? { pts: 1, reb: 2, ast: 3, tpm: 4 } : { passYds: 0, rushYds: 1, recYds: 2, rec: 3 };
   const val = r => stat === "pra" ? r[1] + r[2] + r[3] : r[IDX[stat]];
-  let rows = [...(p.cur || []).map((r, i) => ({ r, w: i < 10 ? 3 : 2, cur: true })), ...(p.prev || []).map(r => ({ r, w: 1, cur: false }))];
+  const np = (p.prev || []).length, wp = np ? Math.min(1, 20 / np) : 0;   // last season counts as a prior worth about 20 game-weights in total
+  let rows = [...(p.cur || []).map((r, i) => ({ r, w: i < 10 ? 3 : 2, cur: true })), ...(p.prev || []).map(r => ({ r, w: wp, cur: false }))];
   if (nba) { const mins = rows.map(x => x.r[0]).sort((a, b) => a - b), med = mins[Math.floor(mins.length / 2)] || 0; rows = rows.filter(x => x.r[0] >= Math.max(8, 0.45 * med)); }
   else if (stat === "passYds") rows = rows.filter(x => x.r[0] > 0);
   if (rows.length < 4) return { error: "thin", p };
@@ -793,7 +796,7 @@ function simProp(bet) {
   const active = Object.values(sig).filter(v => v > 0).length;
   const seasonAvg = avg(base.map(x => val(x.r))), last5 = avg(rows.slice(0, 5).map(x => val(x.r)));
   notes.unshift(`Projected ${proj.toFixed(1)} ${STATS[stat][0]}${nba ? ` in ${projMin.toFixed(1)} minutes` : ""}. ${cur.length >= 3 ? "This season" : "Recent seasons"}: ${seasonAvg.toFixed(1)} a game; last 5: ${last5.toFixed(1)}.`);
-  notes.push(`Built from ${cur.length} games this season and ${rows.length - cur.length} from last season, with this season's games weighted two to three times as heavily.`);
+  notes.push(`Built from ${cur.length} games this season and ${rows.length - cur.length} from last season, with last season counting as a prior worth about seven of this season's games.`);
   const lineTxt = bet.dir === "over" && Number.isInteger(bet.line + 0.5) ? `${bet.line + 0.5}+` : `${bet.dir} ${bet.line}`;
   return { kind: "prop", bet, g, p, label: `${p.name} ${lineTxt} ${STATS[stat][0]}`, win, push, pEff, samples: out, price, sig, avail, score, active, info, notes,
     unit: STATS[stat][0], line: bet.line, winAbove: bet.dir === "over" };
@@ -836,20 +839,21 @@ function verdict(res) {
     if (edge == null) return ["", "No price to compare against, so the score leaves out value."];
     if (res.score >= 60 && res.active >= 2 && edge > 0) return ["good", "Best-bet grade"];
     if (res.score >= 50 && edge > 0) return ["", "Worth a look"];
-    return ["bad", edge > 0 ? "Thin case" : "Pass: the price is higher than the model's chance"];
+    return ["bad", edge > 0 ? "Thin case" : edge > -0.02 ? "Pass: the price is about right" : "Pass: the price is higher than the model's chance"];
   }
   if (res.isPosted && res.sd) {
     if (res.sd.score >= 60 && res.sd.activeSignals >= 2) return ["good", "Best-bet grade on the board"];
     if (res.sd.score >= 50) return ["", "Logged as a paper pick (50+)"];
     return ["bad", "Below the bar on the board"];
   }
-  return ["", edge == null ? "No price for this exact line" : edge > 0 ? "The model likes this price" : "Pass at this price"];
+  return ["", edge == null ? "No price for this exact line" : edge > 0 ? "The model likes this price" : edge > -0.02 ? "Pass: the price is about right" : "Pass at this price"];
 }
 function renderTestResult(res) {
   if (!res) return "";
   if (res.error) {
     const msg = {
-      player: "I couldn't find that player among tonight's and tomorrow's prop markets.",
+      player: "That player isn't in tonight's or tomorrow's prop markets on Kalshi, so there's no game log loaded for him.",
+      unsupported: "The sheet covers points, rebounds, assists, threes and PRA in the NBA, and passing, rushing and receiving yards and receptions in the NFL. That stat isn't one of them yet.",
       ambiguous: `More than one player matches: ${(res.options || []).map(p => esc(p.name)).join(", ")}. Add a last name.`,
       stat: res.p ? `Which stat for ${esc(res.p.name)}? Try points, rebounds, assists, threes or PRA${res.p.lg === "NFL" ? ", or passing, rushing or receiving yards, or receptions" : ""}.` : "Which stat?",
       line: "Add a number, like 30+ or over 27.5.",
