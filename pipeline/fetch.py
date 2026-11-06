@@ -160,16 +160,32 @@ def kalshi(series, codes):
     return {"n": len(j.get("markets", [])), "o": o}
 
 
-def tickets(lg):
-    """Free share-of-bets figures from Action Network's public page. Money percentages are never used."""
+AN_API = "https://api.actionnetwork.com/web/v2/scoreboard/publicbetting/{lg}?bookIds=15&date={d}&periods=event"
+
+
+def tickets(lg, dates):
+    """Free share-of-bets figures from Action Network's public betting feed (the same one its public page loads).
+    Only bet_info.tickets.percent is read. Money percentages are never used."""
+    games, seen = [], set()
+    for day in dates:
+        try:
+            j = get(AN_API.format(lg=lg, d=day))
+            for g in j.get("games") or []:
+                if g.get("id") not in seen:
+                    seen.add(g.get("id"))
+                    games.append(g)
+        except Exception as e:  # noqa: BLE001
+            print("action network feed failed", lg, day, e)
+    if games:
+        return parse_tickets(games)
     try:
         html = get(f"https://www.actionnetwork.com/{lg}/public-betting", as_json=False)
     except Exception as e:  # noqa: BLE001
-        print("action network failed", lg, e)
+        print("action network page failed", lg, e)
         return []
     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
     if not m:
-        print("action network: no page data", lg)
+        print("action network: no page data", lg, len(html), re.sub(r"\s+", " ", html[:160]))
         return []
     d = json.loads(m.group(1))
 
@@ -189,8 +205,12 @@ def tickets(lg):
                 if r:
                     return r
         return None
+    return parse_tickets(find(d.get("props")) or [])
+
+
+def parse_tickets(games):
     out = []
-    for g in find(d.get("props")) or []:
+    for g in games:
         if g.get("status") == "complete":
             continue
         ab = lambda tid: next((t.get("abbr") for t in g.get("teams", []) if t.get("id") == tid), None)
@@ -222,7 +242,7 @@ def main():
             k = kalshi(f"KX{lg.upper()}{mk.upper()}", codes)
             json.dump(k, open(os.path.join(d, f"kalshi_{lg}_{mk}.json"), "w"))
             print("kalshi", lg, mk, "events", len(k["o"]))
-        t = tickets(lg)
+        t = tickets(lg, [x.strftime("%Y%m%d") for x in days])
         json.dump(t, open(os.path.join(d, f"tickets_{lg}.json"), "w"))
         print("tickets", lg, len(t))
 
