@@ -244,7 +244,7 @@ td.acts button { border: 1px solid var(--line); background: var(--panel-2); bord
 
 <script>
 const TZ = "America/Los_Angeles";
-const state = { view: "slate", date: null, filter: "all", data: null, error: null, q: "", result: null, props: null, propsErr: null, board: null, results: null, savedMsg: null, tradeMsg: null, confirmDel: null, confirmClear: false };
+const state = { view: "slate", date: null, filter: "all", data: null, error: null, q: "", result: null, props: null, propsErr: null, board: null, results: null, calib: null, calMkt: "all", savedMsg: null, tradeMsg: null, confirmDel: null, confirmClear: false };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pct = (x, d = 0) => x == null ? "—" : (x * 100).toFixed(d) + "%";
@@ -266,6 +266,7 @@ function setView(v) {
   document.querySelectorAll(".views button").forEach(b => b.setAttribute("aria-current", b.dataset.view === v ? "page" : "false"));
   if (!location.hash.startsWith("#" + v)) history.replaceState(null, "", "#" + v);
   if (v === "test" && !state.props) loadProps().then(() => { if (state.view === "test") render(); });
+  if (v === "record" && !state.calib) loadCalib().then(() => { if (state.view === "record") render(); });
   render();
 }
 function render() {
@@ -339,10 +340,13 @@ function reasons(g, m, sd) {
 }
 function priceBox(sd) {
   const k = sd.kalshiCost != null, kWin = k && sd.kalshiBreakEven < sd.dkBreakEven;
+  const mk = sd.kalshiMaker, bb = sd.consensus && sd.consensus.best;
+  const take = Math.min(sd.dkBreakEven, k ? sd.kalshiBreakEven : 1, bb ? amerBE(bb.odds) : 1), lim = mk && mk.breakEven < take - 1e-9;
   return `<div class="pricebox">
     <div class="venue ${!kWin ? "win" : ""}"><span class="label">DraftKings</span><span class="v">${odds(sd.odds)}</span><span class="d">Needs ${pct(sd.dkBreakEven, 1)} to break even</span></div>
     <div class="venue ${kWin ? "win" : ""}"><span class="label">Kalshi</span><span class="v">${k ? (sd.kalshiCost * 100).toFixed(0) + "¢" : "—"}</span><span class="d">${k ? `Needs ${pct(sd.kalshiBreakEven, 1)} with fee${sd.kalshiLiquid ? "" : " · thin market"}` : "No matching market"}</span></div>
     ${sd.consensus && sd.consensus.best && sd.consensus.best.book !== "DraftKings" ? `<div class="venue"><span class="label">Best book · ${esc(sd.consensus.best.book)}</span><span class="v">${odds(sd.consensus.best.odds)}</span><span class="d">Needs ${pct(amerBE(sd.consensus.best.odds), 1)} · ${sd.consensus.books}-book consensus ${pct(sd.consensus.prob, 1)}</span></div>` : ""}
+    ${lim ? `<div class="venue"><span class="label">Kalshi limit order</span><span class="v">${Math.round(mk.limit * 100)}¢</span><span class="d">Post a bid and wait · needs ${pct(mk.breakEven, 1)} if it fills (maker fee) · may never fill</span></div>` : ""}
   </div>`;
 }
 function renderBest(s, g) {
@@ -460,6 +464,8 @@ function renderRecord() {
         ${row("Score 70+", band(70, 101))}${row("Score 60–69", band(60, 70))}${row("Score 50–59", band(50, 60))}
         ${Object.keys(SIG).map(k => row(SIG[k][0], bySig(k))).join("")}
       </tbody></table></div><p class="fine">Each signal's row counts every graded pick where that signal added points. A signal that can't beat the close here gets cut.</p></div>
+    ${renderAccuracy()}
+    ${renderMakers(all)}
     <div class="card"><h3>Pick log</h3>
       ${all.length ? `<div class="tbl-wrap"><table class="log"><thead><tr><th>Day</th><th>Pick</th><th>Game</th><th class="n">Score</th><th>Taken</th><th class="n">Close</th><th class="n">CLV</th><th>Result</th><th class="n">Units</th></tr></thead><tbody>
       ${all.map(p => `<tr><td>${dayFmt(p.date, { month: "short", day: "numeric" })}</td><td>${p.isBest ? `<b>${esc(p.label)}</b> <span class="chip gold">Best</span>` : esc(p.label)}</td><td>${esc(p.league)} ${esc(p.matchup)}</td><td class="n">${p.score}</td>
@@ -469,6 +475,68 @@ function renderRecord() {
         <td class="${p.result ? "res-" + p.result : "muted"}">${p.result ? ({ W: "Win", L: "Loss", P: "Push" })[p.result] + (p.finalScore ? ` <span class="muted">${esc(p.finalScore)}</span>` : "") : "Pending"}</td>
         <td class="n">${p.units == null ? "—" : signed(p.units, 2)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">No picks yet. Every side scoring 50+ is logged and graded after the game.</p>`}
     </div></div>`;
+}
+
+/* ---------- Kalshi limit orders (paper) ---------- */
+function renderMakers(all) {
+  const mk = all.filter(p => p.maker);
+  if (!mk.length) return `<div class="card"><h3>Kalshi limit orders</h3><p class="muted" style="font-size:13.5px">When a pick's Kalshi market has an exact match for the line, the sheet also posts a paper limit order one cent above the best bid. It fills only if a later snapshot shows the market selling at that price before tip-off. None posted yet.</p></div>`;
+  const filled = mk.filter(p => p.maker.status === "filled"), expired = mk.filter(p => p.maker.status === "expired"), waiting = mk.filter(p => p.maker.status === "posted");
+  const fillRate = filled.length + expired.length ? filled.length / (filled.length + expired.length) : null;
+  const M = list => { const g = list.filter(p => p.maker.result); const c = g.filter(p => p.maker.clvProb != null).map(p => p.maker.clvProb);
+    return { n: g.length, w: g.filter(p => p.maker.result === "W").length, l: g.filter(p => p.maker.result === "L").length, u: g.reduce((a, p) => a + (p.maker.units || 0), 0), clv: c.length ? c.reduce((a, b) => a + b, 0) / c.length : null }; };
+  const T = list => stats(list.filter(p => p.result));
+  const row = (name, r) => `<tr><td>${name}</td><td class="n">${r.n}</td><td class="n">${r.n ? r.w + "-" + r.l : "—"}</td><td class="n">${r.n ? signed(r.u, 2) : "—"}</td><td class="n">${r.clv == null ? "—" : signed(r.clv * 100, 1)}</td></tr>`;
+  const fm = M(filled), ft = T(filled.filter(p => p.maker.result)), ex = T(expired);
+  return `<div class="card"><h3>Kalshi limit orders</h3>
+    <div class="tiles" style="margin:10px 0">
+      <div class="tile"><span class="label">Posted</span><span class="v">${mk.length}</span><span class="d">${waiting.length} still waiting</span></div>
+      <div class="tile"><span class="label">Fill rate</span><span class="v">${fillRate == null ? "—" : pct(fillRate)}</span><span class="d">${filled.length} filled, ${expired.length} expired</span></div>
+      <div class="tile"><span class="label">Saved per fill</span><span class="v">${filled.length ? signed(filled.reduce((a, p) => a + (p.price.breakEven - p.maker.breakEven), 0) / filled.length * 100, 1) : "—"}</span><span class="d">Points of break-even vs taking</span></div>
+    </div>
+    <div class="tbl-wrap"><table class="log"><thead><tr><th>Group</th><th class="n">Graded</th><th class="n">Record</th><th class="n">Units</th><th class="n">Avg CLV</th></tr></thead><tbody>
+      ${row("Filled limit orders", fm)}${row("Same picks at the taking price", ft)}${row("Orders that never filled (taking price)", ex)}
+    </tbody></table></div>
+    <p class="fine">Paper only. An order counts as filled only when a later snapshot (hourly, half-hourly before tip-off) shows the other side selling at or below our price, so fills between snapshots are missed. The catch with resting orders: they tend to fill when the market moves against you. If the filled orders beat the close less often than the ones that never filled, that's the market picking us off, and the cheaper price isn't worth it.</p></div>`;
+}
+
+/* ---------- model vs market accuracy ---------- */
+const CAL_SRC = [["blend", "This app's blend"], ["cons", "Books' consensus"], ["dk", "DraftKings alone"], ["kalshi", "Kalshi"], ["espn", "ESPN model"], ["power", "Power rating"]];
+async function loadCalib() {
+  try { const r = await fetch("calib.json", { cache: "no-store" }); if (!r.ok) throw 0; state.calib = await r.json(); } catch (e) { state.calib = { cols: [], rows: {} }; }
+}
+function calibRows() {
+  const C = state.calib || {}, cols = C.cols || [];
+  return Object.values(C.rows || {}).map(r => Object.fromEntries(cols.map((c, i) => [c, r[i]])));
+}
+function brierCmp(rows, k) {
+  const sub = rows.filter(r => r[k] != null && r.cons != null), n = sub.length;
+  if (!n) return { n: 0 };
+  const se = (p, y) => (p - y) * (p - y);
+  const b = sub.reduce((a, r) => a + se(r[k], r.res), 0) / n, d = sub.map(r => se(r.cons, r.res) - se(r[k], r.res));
+  const md = d.reduce((a, x) => a + x, 0) / n, sd = n > 1 ? Math.sqrt(d.reduce((a, x) => a + (x - md) * (x - md), 0) / (n - 1)) : 0;
+  return { n, b, skill: 1 - b / 0.25, vs: md / 0.25, vsSE: sd / Math.sqrt(n) / 0.25 };
+}
+function renderAccuracy() {
+  const head = `<h3>Model vs market</h3>`;
+  if (!state.calib) return `<div class="card">${head}<p class="muted" style="font-size:13.5px">Loading…</p></div>`;
+  const f = state.calMkt, rows = calibRows().filter(r => f === "all" || r.market === f || r.league === f);
+  const btns = [["all", "All"], ["spread", "Spreads"], ["total", "Totals"], ["NBA", "NBA"], ["NFL", "NFL"]].map(([k, l]) => `<button type="button" data-cal="${k}" aria-pressed="${f === k}">${l}</button>`).join("");
+  const intro = `<p class="muted" style="font-size:13.5px">Every finished game, not just picks: each source's pre-game chance for the home side and the over at the closing line, scored against what happened. Lower Brier is better; a coin flip scores 0.250.</p>`;
+  if (!rows.length) return `<div class="card">${head}<div class="filters" role="group" aria-label="Accuracy filter" style="margin:8px 0">${btns}</div>${intro}<p class="muted" style="font-size:13.5px">No finished games scored yet. Rows are added each night after the grade.</p></div>`;
+  const verdict = c => c.n < 30 ? "too few games" : Math.abs(c.vs) < 2 * c.vsSE ? "no clear difference" : c.vs > 0 ? "better than the books" : "worse than the books";
+  const trs = CAL_SRC.map(([k, name]) => { const c = brierCmp(rows, k); if (!c.n) return "";
+    return `<tr><td>${name}</td><td class="n">${c.n}</td><td class="n">${c.b.toFixed(4)}</td><td class="n">${signed(c.skill * 100, 1)}%</td><td class="n">${k === "cons" ? "—" : signed(c.vs * 100, 2) + " ± " + (2 * c.vsSE * 100).toFixed(2)}</td><td>${k === "cons" ? "the benchmark" : verdict(c)}</td></tr>`; }).join("");
+  const bins = [[0, 0.02, "50–52%"], [0.02, 0.05, "52–55%"], [0.05, 0.1, "55–60%"], [0.1, 1, "60%+"]].map(([lo, hi, lab]) => {
+    const sub = rows.filter(r => r.blend != null && Math.abs(r.blend - 0.5) >= lo && Math.abs(r.blend - 0.5) < hi);
+    if (!sub.length) return `<tr><td>${lab}</td><td class="n">0</td><td class="n">—</td><td class="n">—</td></tr>`;
+    const said = sub.reduce((a, r) => a + Math.max(r.blend, 1 - r.blend), 0) / sub.length, hit = sub.filter(r => (r.blend >= 0.5 ? r.res : 1 - r.res) === 1).length / sub.length;
+    return `<tr><td>${lab}</td><td class="n">${sub.length}</td><td class="n">${pct(said, 1)}</td><td class="n">${pct(hit, 1)}</td></tr>`; }).join("");
+  return `<div class="card">${head}<div class="filters" role="group" aria-label="Accuracy filter" style="margin:8px 0">${btns}</div>${intro}
+    <div class="tbl-wrap"><table class="log"><thead><tr><th>Source</th><th class="n">Games</th><th class="n">Brier</th><th class="n">Skill vs 50/50</th><th class="n">Skill vs books</th><th>So far</th></tr></thead><tbody>${trs}</tbody></table></div>
+    <h3 style="margin-top:14px;font-size:15px">Is the blend's confidence honest?</h3>
+    <div class="tbl-wrap"><table class="log"><thead><tr><th>Blend favored a side by</th><th class="n">Games</th><th class="n">Blend said</th><th class="n">Side won</th></tr></thead><tbody>${bins}</tbody></table></div>
+    <p class="fine">Skill vs books compares each source with the sportsbooks' consensus on the same games, with a rough 95% margin (± two standard errors). Spreads and totals are priced near 50%, so honest differences are tiny and need several hundred games to show. Expect the consensus to be hard to beat; a source that stays behind it after 500 games should lose its weight in the blend.</p></div>`;
 }
 
 /* ---------- method ---------- */
@@ -491,7 +559,10 @@ function renderMethod() {
     <h3 style="font-size:20px">Test a bet</h3>
     <p>Ask about any side, total or player prop on the board, like "Luka 45+ points" or "Lakers -3.5". The sheet simulates the game 10,000 times and reports how many of every 100 the bet wins. Game lines draw the margin or total from a bell curve centered on the market, nudged by ESPN's model and the power rating. Player props replay the player's own games, with last season as a prior worth about seven of this season's games, scaled to tonight's minutes, matchup and missing teammates. The price comes from Kalshi's ladder for that line, or from odds you type, like "at +150".</p>
     <p>Parlays: join legs with a plus sign, like "Luka 30+ points + Lakers -3.5". Legs from the same game are simulated together, so a star's points move with his team's score and the total; legs from different games are independent. Every day the tab also shows its best available parlay (the best leg from each of two or three games by expected return, each between a 45% and 80% chance, with prop chances blended 35% simulation and 65% market price, and skipping legs where the sim is more than 12 points from the market) with the expected return stated, even when it's negative, and a table of where the simulation and the books disagree most.</p>
-    <p>My trades records paper trades on your own device and grades them each night from final scores and box scores. A parlay with a pushed leg pays the remaining legs; a player who doesn't play voids his leg.</p>
+    <p>My trades records paper trades on your own device and grades them each night from final scores and box scores. A parlay with a pushed leg pays the remaining legs; a player who doesn't play voids his leg. Each trade also gets its closing-line value: the fair chance at your line when the game started, minus the chance your odds needed.</p>
+    <h3 style="font-size:20px">Testing the method itself</h3>
+    <p>The record only grades picks, which is a small, selected sample. So every finished game also gets scored: the books' consensus, DraftKings alone, Kalshi, ESPN's model, the power rating and this app's blend each give a pre-game chance for the home side and the over at the closing line, and the Record tab compares them on the same games with the Brier score. If a source can't beat the consensus over several hundred games, its weight should go to zero. That test, not the win rate, decides what stays in the model.</p>
+    <p>The sheet refreshes every hour from 7 AM to 8 PM Pacific, every half hour in the NBA tip-off window, and every half hour before Sunday's NFL games, so the closing price used for CLV is the market minutes before the game rather than hours.</p>
     <p>Props get their own score out of 100: value against the price (40), recent form against the line (15), matchup (15), role and minutes (15) and rest (10). A simulation only restates the model's chance; it doesn't prove an edge, and props aren't logged in the record yet.</p>
     <h3 style="font-size:20px">Team chemistry</h3>
     <p>The strongest research is a 2019 <i>Nature Human Behaviour</i> study from Northwestern. Teams whose players had won together before beat what their talent alone predicted, adding 2 to 7 points of prediction accuracy across the NBA, Premier League, MLB and cricket. The effect was largest in cricket and baseball. The sheet doesn't score chemistry directly yet: that needs lineup history. For now the health edge and the analyst read stand in for it, and a proper shared-minutes chemistry score is on the roadmap.</p>
@@ -499,6 +570,7 @@ function renderMethod() {
     <p>Playing the second night of a back-to-back costs an NBA team about 1.25 points, and the betting market mostly prices that in. The one spot that historically beat the spread is a home team on the second night of a back-to-back against a rested visitor, especially after traveling east. The rest edge targets that spot and is tested like everything else.</p>
     <ul>
       <li><b>Best price.</b> Each side shows what DraftKings and Kalshi need you to win to break even. Kalshi's figure adds an assumed taker fee of 7% × price × (1 − price).</li>
+      <li><b>Limit orders.</b> When Kalshi lists the exact line, a pick also gets a paper limit order one cent above the best bid, which pays the lower maker fee of 1.75% × price × (1 − price). It counts as filled only if a later snapshot shows the market selling at that price before the game. The Record tab compares fills with simply taking the price, because resting orders tend to fill when the market moves against you.</li>
       <li><b>Paper picks.</b> Every side scoring 50+ is logged with its price, then graded with the closing price and the result.</li>
       <li><b>Closing line value.</b> How far the market moved toward a pick by game time. It's the fastest honest test of an edge.</li>
       <li><b>Bankroll rules once real money starts.</b> 1 unit = 1% of bankroll, flat; at most 3 units a day; pause after a 20% drawdown.</li>
@@ -1202,10 +1274,38 @@ function gradeLeg(l, R) {
   const margin = l.side === "home" ? g.hs - g.as : g.as - g.hs;
   return sg(l.kind === "ml" ? margin : margin + l.line);
 }
+/* closing-line value: the closing fair chance of the trade at the line you took, minus the chance your price needed */
+function frozenGame(id) {
+  for (const s of Object.values((state.data && state.data.slates) || {})) { const g = (s.games || []).find(x => x.id === id); if (g) return g.frozen ? g : null; }
+  return null;
+}
+function legClose(l) {
+  if (l.kind === "prop") {
+    const c = ((state.props && state.props.closed) || {})[`${l.pid}|${l.gameId}`], q = c && c.ladders && c.ladders[l.stat], r = q ? ladderAt(q, l.line) : null;
+    return r ? (l.dir === "over" ? r.mid : 1 - r.mid) : null;
+  }
+  const g = frozenGame(l.gameId); if (!g) return null;
+  if (l.kind === "ml") { const c = g.ml && g.ml[l.side]; return c ? c.prob : null; }
+  const m = (g.markets || []).find(x => x.type === (l.kind === "total" ? "total" : "spread")), key = l.kind === "total" ? l.dir : l.side;
+  const sd = m && m.sides.find(x => x.key === key); if (!sd) return null;
+  const pc = Math.min(0.99, Math.max(0.01, sd.consensus ? sd.consensus.prob : sd.dkFair));
+  if (l.kind === "total") {   // move the closing chance to your line along the same bell curve the simulation uses
+    const S = SD_T[g.league], mu = key === "over" ? sd.line + S * PhiInv(pc) : sd.line - S * PhiInv(pc);
+    return key === "over" ? Phi((mu - l.line) / S) : Phi((l.line - mu) / S);
+  }
+  const S = SD_M[g.league], mu = S * PhiInv(pc) - sd.line;
+  return Phi((mu + l.line) / S);
+}
+function tradeClose(t) {
+  if (t.legs.length > 1 && new Set(t.legs.map(l => l.gameId)).size < t.legs.length) return null;   // same-game legs move together; a product would overstate it
+  const ps = t.legs.map(legClose);
+  return ps.some(p => p == null) ? null : ps.reduce((a, b) => a * b, 1);
+}
 function gradeAll() {
   const R = state.results || { games: {} }, all = loadTrades();
   let changed = false;
   for (const t of all) {
+    if (t.closeProb == null) { const cp = tradeClose(t); if (cp != null) { t.closeProb = +cp.toFixed(4); t.clv = +(cp - 1 / t.dec).toFixed(4); changed = true; } }
     if (t.status !== "open") continue;
     const res = t.legs.map(l => gradeLeg(l, R));
     let st = null, dec = t.dec;
@@ -1230,15 +1330,16 @@ function settle(id, st) {
   saveTrades(all);
 }
 function renderTrades() {
-  if (!state.results) { loadResults().then(() => { gradeAll(); if (state.view === "trades") render(); }); return `<div class="note">Loading results…</div>`; }
+  if (!state.results || !state.props) { Promise.all([state.results ? 0 : loadResults(), loadProps()]).then(() => { gradeAll(); if (state.view === "trades") render(); }); return `<div class="note">Loading results…</div>`; }
   const all = loadTrades().sort((a, b) => b.at.localeCompare(a.at));
   const done = all.filter(t => t.status !== "open"), W = done.filter(t => t.status === "won").length, L = done.filter(t => t.status === "lost").length, P = done.filter(t => t.status === "push").length;
   const profit = done.reduce((a, t) => a + (t.profit || 0), 0), staked = done.reduce((a, t) => a + t.stake, 0), open = all.filter(t => t.status === "open");
+  const clvs = all.filter(t => t.clv != null).map(t => t.clv), avgClv = clvs.length ? clvs.reduce((a, b) => a + b, 0) / clvs.length : null;
   const legTxt = (l, r) => `<span class="leg ${r ? "r-" + r : ""}">${esc(l.label || "")}${r ? ` <b>${{ W: "won", L: "lost", P: "push", V: "void" }[r]}</b>` : ""}</span>`;
   const rows = all.map(t => `<tr>
       <td>${new Date(t.at).toLocaleDateString("en-US", { timeZone: TZ, month: "short", day: "numeric" })}</td>
       <td class="wrap"><b>${esc(t.label)}</b>${t.kind === "parlay" || (t.legs[0] && t.legs[0].matchup) ? `<div class="legs-s">${t.legs.map((l, i) => legTxt(l, (t.legRes || [])[i])).join("")}${t.kind !== "parlay" && t.legs[0].matchup ? ` <span class="muted">${esc(t.legs[0].matchup)}</span>` : ""}</div>` : ""}</td>
-      <td class="n">$${(+t.stake).toFixed(0)}</td><td class="n">${odds(t.odds)}</td><td class="n">${pct(t.model)}</td>
+      <td class="n">$${(+t.stake).toFixed(0)}</td><td class="n">${odds(t.odds)}</td><td class="n">${pct(t.model)}</td><td class="n" title="${t.closeProb == null ? "Fills in once every game in the trade has started" : `Closing fair chance ${pct(t.closeProb, 1)}; your price needed ${pct(1 / t.dec, 1)}`}">${t.clv == null ? "—" : signed(t.clv * 100, 1)}</td>
       <td class="${t.status === "won" ? "res-W" : t.status === "lost" ? "res-L" : "muted"}">${{ open: "Open", won: "Won", lost: "Lost", push: "Push" }[t.status] || "Open"}${t.status !== "open" && t.auto === false ? ` <span class="muted">(by hand)</span>` : ""}</td>
       <td class="n">${t.profit == null ? "—" : (t.profit >= 0 ? "+" : "−") + "$" + Math.abs(t.profit).toFixed(2)}</td>
       <td class="acts">${t.status === "open" ? `<button type="button" data-act="settle" data-id="${esc(t.id)}" data-st="won">W</button><button type="button" data-act="settle" data-id="${esc(t.id)}" data-st="lost">L</button><button type="button" data-act="settle" data-id="${esc(t.id)}" data-st="push">P</button>` : ""}<button type="button" data-act="del" data-id="${esc(t.id)}">${state.confirmDel === t.id ? "Confirm" : "Delete"}</button></td></tr>`).join("");
@@ -1249,11 +1350,13 @@ function renderTrades() {
       <div class="tile"><span class="label">Profit</span><span class="v ${profit >= 0 ? "pos" : "neg"}">${done.length ? (profit >= 0 ? "+" : "−") + "$" + Math.abs(profit).toFixed(2) : "—"}</span><span class="d">Settled trades</span></div>
       <div class="tile"><span class="label">Return</span><span class="v">${staked ? signed(profit / staked * 100, 1) + "%" : "—"}</span><span class="d">Profit per dollar staked</span></div>
       <div class="tile"><span class="label">At risk</span><span class="v">$${open.reduce((a, t) => a + t.stake, 0).toFixed(0)}</span><span class="d">Open stakes</span></div>
+      <div class="tile"><span class="label">Avg CLV</span><span class="v">${avgClv == null ? "—" : signed(avgClv * 100, 1)}</span><span class="d">Points vs the closing price</span></div>
+      <div class="tile"><span class="label">Beat close</span><span class="v">${clvs.length ? pct(clvs.filter(x => x > 0).length / clvs.length) : "—"}</span><span class="d">${clvs.length} trade${clvs.length === 1 ? "" : "s"} measured</span></div>
     </div>
-    ${all.length ? `<div class="card"><div class="tbl-wrap"><table class="log trades"><thead><tr><th>Day</th><th>Bet</th><th class="n">Stake</th><th class="n">Odds</th><th class="n">Model</th><th>Result</th><th class="n">P/L</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`
+    ${all.length ? `<div class="card"><div class="tbl-wrap"><table class="log trades"><thead><tr><th>Day</th><th>Bet</th><th class="n">Stake</th><th class="n">Odds</th><th class="n">Model</th><th class="n">CLV</th><th>Result</th><th class="n">P/L</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`
       : `<div class="note">No paper trades yet. Open <a href="#test">Test a bet</a>, run a bet or a parlay, and press Record paper trade.</div>`}
     <div class="trade-tools"><button type="button" data-act="export">Download backup</button><label class="filebtn">Restore backup<input type="file" accept="application/json,.json" data-act="import"></label>${all.length ? `<button type="button" data-act="clear">${state.confirmClear ? "Tap again to delete every trade" : "Delete all"}</button>` : ""}${state.tradeMsg ? `<span class="saved">${esc(state.tradeMsg)}</span>` : ""}</div>
-    <p class="fine">Trades live in this browser on this device only; nobody else sees them, and clearing the site's data deletes them, so download a backup now and then. Results update after each nightly run. W, L and P settle a trade by hand when the app can't (for example a player who sat out and a book that graded it differently).</p>
+    <p class="fine">Trades live in this browser on this device only; nobody else sees them, and clearing the site's data deletes them, so download a backup now and then. Results update after each nightly run. CLV is the closing fair chance at your line (the sportsbooks' consensus for game lines, Kalshi's last pre-game price for props) minus the chance your odds needed; it fills in once every game in the trade has started, and same-game parlays are left out because their legs move together. W, L and P settle a trade by hand when the app can't (for example a player who sat out and a book that graded it differently).</p>
   </div>`;
 }
 function exportTrades() {
@@ -1289,7 +1392,8 @@ $("#main").addEventListener("click", e => {
     render(); return;
   }
   const d = e.target.closest("button[data-date]"); if (d) { state.date = d.dataset.date; render(); return; }
-  const f = e.target.closest("button[data-filter]"); if (f) { state.filter = f.dataset.filter; render(); }
+  const f = e.target.closest("button[data-filter]"); if (f) { state.filter = f.dataset.filter; render(); return; }
+  const cf = e.target.closest("button[data-cal]"); if (cf) { state.calMkt = cf.dataset.cal; render(); }
 });
 $("#main").addEventListener("submit", e => {
   if (e.target.id === "ask") { e.preventDefault(); runQuery(e.target.q.value); return; }
