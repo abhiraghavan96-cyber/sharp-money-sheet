@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Daily NFL and NBA betting sheet: DraftKings lines, Kalshi prices, public bets, situation factors and one scored best bet, with a paper-trading record.">
+<meta name="robots" content="noindex">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>Sharp Money Sheet</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a night-desk betting sheet. Header + slate picker, a gold-framed best bet, then game tickets with expandable reads; Record and Method as sibling views */
+:root {
+  --bg: #0B1019; --panel: #121A26; --panel-2: #172131; --ink: #EEF1F5; --muted: #8F9BAD; --line: #233044;
+  --gold: #D6B36A; --gold-soft: rgba(214,179,106,.12); --sharp: #6EA8FE; --sharp-soft: rgba(110,168,254,.14);
+  --public: #F2A65A; --public-soft: rgba(242,166,90,.14); --good: #5BC88E; --good-soft: rgba(91,200,142,.14); --bad: #F07B7B; --warn: #E8C25A;
+  --f-display: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #F3F1EC; --panel: #FFFFFF; --panel-2: #F7F5F0; --ink: #121823; --muted: #5E6878; --line: #DEDAD0;
+  --gold: #8E6C1F; --gold-soft: rgba(142,108,31,.10); --sharp: #1D5BB8; --sharp-soft: rgba(29,91,184,.10);
+  --public: #B4590D; --public-soft: rgba(180,89,13,.10); --good: #237A4B; --good-soft: rgba(35,122,75,.10); --bad: #B33A3A; --warn: #8A6A0B; color-scheme: light } }
+:root[data-theme="light"] {
+  --bg: #F3F1EC; --panel: #FFFFFF; --panel-2: #F7F5F0; --ink: #121823; --muted: #5E6878; --line: #DEDAD0;
+  --gold: #8E6C1F; --gold-soft: rgba(142,108,31,.10); --sharp: #1D5BB8; --sharp-soft: rgba(29,91,184,.10);
+  --public: #B4590D; --public-soft: rgba(180,89,13,.10); --good: #237A4B; --good-soft: rgba(35,122,75,.10); --bad: #B33A3A; --warn: #8A6A0B; color-scheme: light }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 920px; margin: 0 auto; padding-block: 18px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 22px; }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 700; margin: 0; text-wrap: balance; letter-spacing: .015em; }
+p { margin: 0; }
+.label { font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.muted { color: var(--muted); }
+button { font: inherit; color: inherit; }
+button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+a { color: var(--sharp); }
+
+header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 12px; }
+.mark { width: 38px; height: 38px; border-radius: 9px; border: 1.5px solid var(--gold); display: grid; place-items: center; font-family: var(--f-display); font-weight: 700; color: var(--gold); font-size: 17px; letter-spacing: .04em; }
+.brand h1 { font-size: 30px; line-height: 1; text-transform: uppercase; }
+.brand small { display: block; font-size: 12px; color: var(--muted); letter-spacing: .02em; margin-top: 3px; }
+.views { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.views button { background: none; border: 0; border-radius: 7px; padding: 6px 12px; font-weight: 600; font-size: 14px; cursor: pointer; color: var(--muted); }
+.views button[aria-current="page"] { background: var(--panel-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+
+.toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px 16px; }
+.dates { display: flex; flex-wrap: wrap; gap: 8px; }
+.dates button { border: 1px solid var(--line); background: var(--panel); border-radius: 9px; padding: 7px 12px; cursor: pointer; text-align: left; line-height: 1.2; }
+.dates button small { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.dates button[aria-pressed="true"] { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
+.fresh { font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.fresh b { color: var(--ink); font-weight: 600; }
+
+/* best bet */
+.best { position: relative; background: linear-gradient(180deg, var(--gold-soft), transparent 60%), var(--panel); border: 1px solid var(--gold); border-radius: 14px; padding: 20px; display: grid; gap: 18px; }
+.best-top { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.eyebrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.eyebrow .tag { font-family: var(--f-display); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--gold); font-size: 15px; }
+.pick { font-family: var(--f-display); font-weight: 700; font-size: clamp(40px, 9vw, 60px); line-height: .95; margin-top: 6px; }
+.pick-sub { color: var(--muted); margin-top: 8px; font-size: 14px; }
+.dial { width: 108px; height: 108px; flex: none; }
+.dial text { font-family: var(--f-mono); }
+.case { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+.sig-list { display: grid; gap: 9px; }
+.sig { display: grid; grid-template-columns: 112px minmax(0, 1fr) 38px; gap: 10px; align-items: center; font-size: 13.5px; }
+.sig .name { color: var(--muted); }
+.sig .track { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); }
+.sig .track i { display: block; height: 100%; background: var(--sharp); border-radius: 3px; }
+.sig .track i.sit { background: var(--gold); }
+.sig .pts { font-family: var(--f-mono); text-align: right; font-size: 12.5px; }
+.why { display: grid; gap: 8px; font-size: 14px; }
+.why li { margin-left: 18px; }
+.why ul { margin: 0; padding: 0; display: grid; gap: 6px; }
+.read { border-left: 2px solid var(--gold); padding: 2px 0 2px 14px; display: grid; gap: 6px; font-size: 14.5px; }
+.read .watch { font-size: 13px; color: var(--muted); }
+.pricebox { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.venue { border: 1px solid var(--line); background: var(--panel-2); border-radius: 10px; padding: 10px 12px; display: grid; gap: 2px; }
+.venue.win { border-color: var(--good); background: var(--good-soft); }
+.venue .v { font-family: var(--f-mono); font-weight: 600; font-size: 18px; }
+.venue .d { font-size: 12.5px; color: var(--muted); }
+.radar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
+.pass { background: var(--panel); border: 1px dashed var(--line); border-radius: 14px; padding: 20px; display: grid; gap: 6px; }
+
+/* games */
+.section-head { display: flex; justify-content: space-between; align-items: end; gap: 12px; flex-wrap: wrap; }
+.section-head h2 { font-size: 26px; text-transform: uppercase; }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.filters button { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 4px 11px; font-size: 13px; cursor: pointer; color: var(--muted); }
+.filters button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); }
+.games { display: flex; flex-direction: column; gap: 12px; }
+.game { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.game.is-best { border-color: var(--gold); }
+.g-head { display: flex; justify-content: space-between; align-items: center; gap: 8px 12px; padding: 12px 16px; flex-wrap: wrap; }
+.g-head h3 { font-size: 21px; line-height: 1.15; font-weight: 600; }
+.g-head h3 .at { color: var(--muted); margin: 0 6px; font-weight: 500; }
+.g-head h3 .rec { white-space: nowrap; font-family: var(--f-mono); font-size: 12px; color: var(--muted); font-weight: 500; margin-left: 5px; letter-spacing: 0; }
+.g-meta { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12.5px; white-space: nowrap; flex-wrap: wrap; }
+.lg { font-family: var(--f-mono); font-size: 11px; font-weight: 600; border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; color: var(--ink); }
+.mkt { padding: 10px 16px 12px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
+.mkt-info { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; }
+.mkt-info .name { font-weight: 600; font-size: 14px; }
+.mkt-info .move { color: var(--muted); }
+.mkt-info .move b { color: var(--ink); font-weight: 600; }
+.row, .row-h { display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(4, minmax(0, .9fr)) 52px; gap: 8px; align-items: center; }
+.row-h { font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); padding-top: 4px; }
+.row-h span:not(:first-child), .row span:not(:first-child) { text-align: right; }
+.row { font-family: var(--f-mono); font-size: 13px; font-variant-numeric: tabular-nums; padding: 6px 0; border-top: 1px dashed var(--line); }
+.row .side { font-family: var(--f-body); font-weight: 500; font-size: 14px; min-width: 0; }
+.row .sc { font-weight: 600; }
+.row .sc.hi { color: var(--gold); }
+.row .lean { display: inline-block; margin-left: 6px; font-family: var(--f-body); font-size: 11px; font-weight: 600; color: var(--gold); border: 1px solid var(--gold); border-radius: 4px; padding: 0 4px; vertical-align: 1px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; border: 1.5px solid var(--line); vertical-align: 1px; }
+.dot.sharp { background: var(--sharp); border-color: var(--sharp); }
+.dot.public { background: var(--public); border-color: var(--public); }
+.dot.both { background: linear-gradient(90deg, var(--sharp) 50%, var(--public) 50%); border-color: transparent; }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; font-family: var(--f-body); color: var(--muted); }
+.chip.split, .chip.sharp { background: var(--sharp-soft); color: var(--sharp); border-color: transparent; }
+.chip.public { background: var(--public-soft); color: var(--public); border-color: transparent; }
+.chip.news { color: var(--warn); border-color: var(--warn); }
+.chip.gold { color: var(--gold); border-color: var(--gold); }
+details.more { border-top: 1px solid var(--line); }
+details.more summary { cursor: pointer; padding: 10px 16px; font-size: 13px; font-weight: 600; color: var(--gold); list-style: none; display: flex; justify-content: space-between; gap: 10px; }
+details.more summary::-webkit-details-marker { display: none; }
+details.more summary::after { content: "+"; font-family: var(--f-mono); }
+details.more[open] summary::after { content: "−"; }
+.more-body { padding: 0 16px 14px; display: grid; gap: 12px; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; font-size: 13px; }
+.fact { background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; display: grid; gap: 3px; }
+.fact b { font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--muted); }
+.note { background: var(--panel); border: 1px dashed var(--line); border-radius: 12px; padding: 16px; color: var(--muted); }
+
+/* record */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 3px; }
+.tile .v { font-family: var(--f-mono); font-weight: 600; font-size: 24px; line-height: 1.15; }
+.tile .d { font-size: 12px; color: var(--muted); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 12px; }
+.card h3 { font-size: 20px; }
+.bar { height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); }
+.bar i { display: block; height: 100%; background: var(--gold); }
+.tbl-wrap { overflow-x: auto; }
+table.log { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.log th { text-align: left; font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.log td { padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.log .n { font-family: var(--f-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.res-W { color: var(--good); font-weight: 600; } .res-L { color: var(--bad); font-weight: 600; }
+.spark { width: 100%; height: 120px; display: block; }
+
+.method { display: grid; gap: 18px; }
+.method p, .method li { max-width: 70ch; }
+.method ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.weights { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.weights div { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 4px; }
+.weights .w { font-family: var(--f-mono); font-weight: 600; font-size: 19px; color: var(--sharp); }
+.weights .w.sit { color: var(--gold); }
+.weights .t { font-weight: 600; }
+.weights .d { font-size: 13px; color: var(--muted); }
+.fine { font-size: 12.5px; color: var(--muted); }
+footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; }
+
+@media (max-width: 640px) {
+  .row-h { display: none; }
+  .row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 2px; }
+  .row .side { grid-column: 1; }
+  .row .sc { grid-column: 2; grid-row: 1; }
+  .row .cell { grid-column: 1 / -1; text-align: left !important; display: inline; font-size: 12px; color: var(--muted); }
+  .row .cells { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .sig { grid-template-columns: 96px minmax(0, 1fr) 34px; }
+  .dial { width: 88px; height: 88px; }
+}
+@media (min-width: 641px) { .row .cells { display: contents; } .row .cell .k { display: none; } }
+@media (prefers-reduced-motion: no-preference) { .sig .track i, .bar i { transition: width .5s ease; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="brand"><div class="mark" aria-hidden="true">SM</div><div><h1>Sharp Money Sheet</h1><small>NFL · NBA · paper trading until the record earns it</small></div></div>
+    <nav class="views" aria-label="Views">
+      <button type="button" id="v-slate" data-view="slate">Slate</button>
+      <button type="button" id="v-record" data-view="record">Record</button>
+      <button type="button" id="v-method" data-view="method">Method</button>
+    </nav>
+  </header>
+  <main id="main" aria-live="polite"><div class="note">Loading the latest slate…</div></main>
+  <footer>For research and entertainment among friends. Not betting advice. Lines and prices move; check them before acting. If gambling stops being fun, call 1-800-GAMBLER.</footer>
+</div>
+
+<script>
+const TZ = "America/Los_Angeles";
+const state = { view: "slate", date: null, filter: "all", data: null, error: null };
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const pct = (x, d = 0) => x == null ? "—" : (x * 100).toFixed(d) + "%";
+const odds = o => o == null ? "—" : (o > 0 ? "+" + o : String(o)).replace("-", "−");
+const signed = (x, d = 1) => x == null ? "—" : (x > 0 ? "+" : x < 0 ? "−" : "±") + Math.abs(x).toFixed(d);
+const fmtLine = x => x == null ? "—" : x === 0 ? "PK" : (x > 0 ? "+" : "−") + Math.abs(x);
+const timeFmt = iso => new Date(iso).toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+const dayFmt = (d, o) => new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { timeZone: "UTC", ...o });
+const stampFmt = iso => new Date(iso).toLocaleString("en-US", { timeZone: TZ, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + " PT";
+const todayPT = () => new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+const SIG = {
+  rlm: ["Reverse move", 30, "m"], kalshi: ["Kalshi agrees", 25, "m"], move: ["Line move", 25, "m"], fade: ["Public fade", 20, "m"],
+  model: ["ESPN model", 20, "s"], analyst: ["Analyst read", 15, "s"], rest: ["Rest edge", 10, "s"], health: ["Health edge", 10, "s"]
+};
+const TAG = { split: ["split", "Sharp vs public"], consensus: ["", "Consensus"], sharp: ["sharp", "Sharp lean"], public: ["public", "Public lean"], balanced: ["", "Balanced"] };
+
+function setView(v) {
+  state.view = v;
+  document.querySelectorAll(".views button").forEach(b => b.setAttribute("aria-current", b.dataset.view === v ? "page" : "false"));
+  if (location.hash !== "#" + v) history.replaceState(null, "", "#" + v);
+  render();
+}
+function render() {
+  const main = $("#main");
+  if (state.error) { main.innerHTML = `<div class="note">The latest data couldn't be loaded (${esc(state.error)}). Refresh the page in a minute.</div>`; return; }
+  if (!state.data) { main.innerHTML = `<div class="note">Loading the latest slate…</div>`; return; }
+  main.innerHTML = state.view === "record" ? renderRecord() : state.view === "method" ? renderMethod() : renderSlate();
+}
+
+/* ---------- slate ---------- */
+function pickDate() {
+  const dates = Object.keys(state.data.slates || {}).sort();
+  if (!dates.length) return null;
+  if (state.date && state.data.slates[state.date]) return state.date;
+  const t = todayPT();
+  return dates.find(d => d >= t) || dates[dates.length - 1];
+}
+function renderSlate() {
+  const date = pickDate();
+  if (!date) return `<div class="note">No slate yet. The next refresh fills this in with real lines, Kalshi prices and public betting.</div>`;
+  state.date = date;
+  const s = state.data.slates[date], games = s.games || [];
+  const dates = Object.keys(state.data.slates).sort();
+  const anyTickets = games.some(g => g.hasTickets);
+  const best = s.best ? games.find(g => g.id === s.best.gameId) : null;
+  const shown = games.filter(g => state.filter === "all" ? true : state.filter === "split" ? g.markets.some(m => m.tag === "split") : state.filter === "lean" ? !!(g.note && g.note.lean) : g.markets.some(m => m.sides.some(x => x.score >= 50)));
+  return `<div style="display:grid;gap:20px">
+    <div class="toolbar"><div class="dates" role="group" aria-label="Choose slate">${dates.map(d => {
+      const sl = state.data.slates[d];
+      return `<button type="button" id="d-${d}" data-date="${d}" aria-pressed="${d === date}">${dayFmt(d, { weekday: "short", month: "short", day: "numeric" })}<small>${esc((sl.leagues || []).join(" + "))} · ${(sl.games || []).length} games</small></button>`;
+    }).join("")}</div></div>
+    <div class="fresh"><span>Updated <b>${esc(stampFmt(s.updatedAt))}</b></span><span>Lines: DraftKings</span><span>Prices: Kalshi</span><span>Bets %: ${anyTickets ? "Action Network" : "<b>not posted yet</b>"}</span></div>
+    ${renderBest(s, best)}
+    <section style="display:grid;gap:12px" aria-label="Games">
+      <div class="section-head"><h2>The board</h2>
+        <div class="filters" role="group" aria-label="Filter games">${[["all", "All"], ["picks", "Scored 50+"], ["split", "Sharp vs public"], ["lean", "Has a lean"]].map(([k, l]) => `<button type="button" id="f-${k}" data-filter="${k}" aria-pressed="${state.filter === k}">${l}</button>`).join("")}</div></div>
+      <div class="legend"><span><i class="dot sharp"></i>Sharp side</span><span><i class="dot public"></i>Public side (60%+ of bets)</span><span><span class="chip gold" style="padding:0 5px">Lean</span> Analyst lean</span></div>
+      <div class="games">${shown.length ? shown.map(g => renderGame(g, s)).join("") : `<div class="note">No games match this filter.</div>`}</div>
+    </section></div>`;
+}
+
+function dial(score) {
+  const r = 44, c = 2 * Math.PI * r, f = Math.max(0, Math.min(100, score)) / 100;
+  return `<svg class="dial" viewBox="0 0 108 108" role="img" aria-label="Score ${score} of 100">
+    <circle cx="54" cy="54" r="${r}" fill="none" stroke="var(--line)" stroke-width="7"/>
+    <circle cx="54" cy="54" r="${r}" fill="none" stroke="var(--gold)" stroke-width="7" stroke-linecap="round" stroke-dasharray="${(c * f).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 54 54)"/>
+    <text x="54" y="58" text-anchor="middle" font-size="28" font-weight="600" fill="var(--ink)">${score}</text>
+    <text x="54" y="76" text-anchor="middle" font-size="10" fill="var(--muted)">of 100</text></svg>`;
+}
+function sigBars(sd) {
+  const sg = sd.signals || {};
+  return Object.keys(SIG).filter(k => k in sg).map(k => {
+    const [name, max, kind] = SIG[k], v = sg[k] || 0;
+    return `<div class="sig"><span class="name">${name}</span><span class="track"><i class="${kind === "s" ? "sit" : ""}" style="width:${(100 * v / max).toFixed(0)}%"></i></span><span class="pts">${v ? "+" + Math.round(v) : "0"}</span></div>`;
+  }).join("");
+}
+function reasons(g, m, sd) {
+  const out = [], sg = sd.signals || {}, si = sd.situation || {};
+  if (sg.rlm > 0) out.push(`Line moved ${Math.abs(sd.move)} toward this side while only ${sd.tickets}% of bets were on it.`);
+  else if (sg.move > 0) out.push(`Line moved ${Math.abs(sd.move)} toward this side since open.`);
+  if (sg.kalshi > 0) out.push(`Kalshi prices it at ${pct(sd.kalshiProb, 1)}, above DraftKings' fair ${pct(sd.dkFair, 1)}.`);
+  if (sg.fade > 0) out.push(`${100 - sd.tickets}% of public bets are on the other side.`);
+  if (sg.model > 0) out.push(`ESPN's model makes it ${si.modelEdge > 0 ? si.modelEdge.toFixed(1) + " points better" : ""} than the line.`);
+  if (sg.rest > 0) out.push(`Rest edge: ${si.rest} days off against ${si.oppRest}.`);
+  if (sg.health > 0) out.push(`Opponent lists ${(si.oppOut || []).length} players out to ${(si.out || []).length}.`);
+  if (sd.newsMove || m.news) out.push(`The line moved enough to suggest news, so move-based signals are off.`);
+  return out;
+}
+function priceBox(sd) {
+  const k = sd.kalshiCost != null, kWin = k && sd.kalshiBreakEven < sd.dkBreakEven;
+  return `<div class="pricebox">
+    <div class="venue ${!kWin ? "win" : ""}"><span class="label">DraftKings</span><span class="v">${odds(sd.odds)}</span><span class="d">Needs ${pct(sd.dkBreakEven, 1)} to break even</span></div>
+    <div class="venue ${kWin ? "win" : ""}"><span class="label">Kalshi</span><span class="v">${k ? (sd.kalshiCost * 100).toFixed(0) + "¢" : "—"}</span><span class="d">${k ? `Needs ${pct(sd.kalshiBreakEven, 1)} with fee${sd.kalshiLiquid ? "" : " · thin market"}` : "No matching market"}</span></div>
+  </div>`;
+}
+function renderBest(s, g) {
+  const others = Object.values(state.data.picks || {}).filter(p => p.date === s.date && !p.isBest).sort((a, b) => b.score - a.score).slice(0, 4);
+  if (!s.best || !g) return `<div class="pass"><span class="eyebrow"><span class="tag">Best bet</span></span><h3 style="font-size:34px">Pass</h3><p class="muted">Nothing scored 60 with at least two signals behind it. No edge, no bet.</p></div>`;
+  const m = g.markets.find(x => x.type === s.best.market), sd = m.sides.find(x => x.key === s.best.side);
+  const r = reasons(g, m, sd), note = g.note;
+  return `<article class="best" aria-label="Best bet">
+    <div class="best-top"><div>
+      <div class="eyebrow"><span class="tag">Best bet</span><span class="chip">Paper</span><span class="chip">${g.league} · ${dayFmt(s.date, { weekday: "short" })} ${timeFmt(g.start)} PT</span></div>
+      <div class="pick">${esc(sd.label)}</div>
+      <div class="pick-sub">${esc(g.awayName)} at ${esc(g.homeName)} · ${m.type === "spread" ? "Spread" : "Total"} · opened ${m.type === "spread" ? fmtLine(sd.openLine) : sd.openLine}, now ${m.type === "spread" ? fmtLine(sd.line) : sd.line}</div>
+    </div>${dial(sd.score)}</div>
+    <div class="case">
+      <div class="sig-list"><span class="label">The case · market ${sd.marketScore}${sd.situationScore != null ? ` · situation ${sd.situationScore}` : ""}</span>${sigBars(sd)}</div>
+      <div class="why"><span class="label">Why</span><ul>${r.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>
+    </div>
+    ${note ? `<div class="read"><span class="label">${note.auto ? "Auto read" : "Analyst read"}</span><p>${esc(note.read)}</p>${note.watch ? `<p class="watch">What would change it: ${esc(note.watch)}</p>` : ""}</div>` : ""}
+    ${priceBox(sd)}
+    ${others.length ? `<div class="radar"><span class="label">Also logged</span>${others.map(p => `<span class="chip">${esc(p.label)} <span class="mono">${p.score}</span></span>`).join("")}</div>` : ""}
+  </article>`;
+}
+
+function renderGame(g, s) {
+  const isBest = s.best && s.best.gameId === g.id, c = g.ctx || {}, note = g.note;
+  const rec = side => c[side] && c[side].rec ? `<span class="rec">${esc(c[side].rec)}</span>` : "";
+  const head = `<div class="g-head"><h3>${esc(g.awayName)}${rec("away")}<span class="at">at</span>${esc(g.homeName)}${rec("home")}</h3>
+    <div class="g-meta"><span class="lg">${g.league}</span><span>${timeFmt(g.start)} PT</span>${g.bets ? `<span>${g.bets.toLocaleString()} bets</span>` : ""}${isBest ? `<span class="chip gold">Best bet</span>` : ""}</div></div>`;
+  if (!g.hasLines) return `<article class="game">${head}<div class="mkt"><p class="muted" style="font-size:13.5px">No line posted yet.</p></div>${moreBlock(g, note)}</article>`;
+  const lean = note && note.lean;
+  return `<article class="game${isBest ? " is-best" : ""}">${head}${g.markets.map(m => {
+    const t = TAG[m.tag] || TAG.balanced, home = m.sides.find(x => x.key === "home") || m.sides[1];
+    const openTxt = m.type === "spread" ? `${esc(g.home)} ${fmtLine(home.openLine)}` : m.sides[0].openLine;
+    const nowTxt = m.type === "spread" ? fmtLine(home.line) : m.sides[0].line;
+    return `<div class="mkt">
+      <div class="mkt-info"><span class="name">${m.type === "spread" ? "Spread" : "Total"}</span><span class="move">Open <span class="mono">${openTxt}</span> → <b class="mono">${nowTxt}</b></span><span class="chip ${t[0]}">${t[1]}</span>${m.news ? `<span class="chip news">Big move, likely news</span>` : ""}</div>
+      <div class="row-h" aria-hidden="true"><span>Side</span><span>Bets</span><span>DK fair</span><span>Kalshi</span><span>Best price</span><span>Score</span></div>
+      ${m.sides.map(sd => {
+        const dot = sd.isSharp && sd.isPublic ? "both" : sd.isSharp ? "sharp" : sd.isPublic ? "public" : "";
+        const price = sd.bestVenue === "Kalshi" ? `Kalshi ${(sd.kalshiCost * 100).toFixed(0)}¢` : `DK ${odds(sd.odds)}`;
+        const isLean = lean && lean.market === m.type && lean.side === sd.key;
+        return `<div class="row"><span class="side"><i class="dot ${dot}" aria-hidden="true"></i>${esc(sd.label)}${isLean ? `<span class="lean" title="Analyst lean, confidence ${lean.conf} of 3">Lean</span>` : ""}</span>
+          <span class="cells"><span class="cell"><span class="k">Bets </span>${sd.tickets == null ? "—" : sd.tickets + "%"}</span><span class="cell"><span class="k">DK fair </span>${pct(sd.dkFair, 1)}</span><span class="cell"><span class="k">Kalshi </span>${sd.kalshiProb == null ? "—" : pct(sd.kalshiProb, 1)}</span><span class="cell"><span class="k">Best </span>${price}</span></span>
+          <span class="sc ${sd.score >= 60 ? "hi" : ""}">${sd.score}</span></div>`;
+      }).join("")}</div>`;
+  }).join("")}${moreBlock(g, note)}</article>`;
+}
+function moreBlock(g, note) {
+  const c = g.ctx;
+  if (!note && !c) return "";
+  const side = k => c && c[k] ? c[k] : null;
+  const injuries = k => { const t = side(k); if (!t) return "—"; const o = (t.out || []).join(", "), q = (t.q || []).join(", "); return (o ? `<b>Out:</b> ${esc(o)}` : "No one out") + (q ? `<br><span class="muted">Questionable: ${esc(q)}</span>` : ""); };
+  const sp = g.markets.find(m => m.type === "spread"), si = sp ? (sp.sides.find(x => x.key === "home") || {}).situation || {} : {};
+  return `<details class="more"><summary>${note && note.lean ? "Read · lean " + esc(leanLabel(g, note.lean)) : note && note.auto ? "Auto read and context" : "Read and context"}</summary><div class="more-body">
+    ${note ? `<div class="read"><p>${esc(note.read)}</p>${note.watch ? `<p class="watch">What would change it: ${esc(note.watch)}</p>` : ""}</div>` : ""}
+    ${c ? `<div class="facts">
+      <div class="fact"><span class="label">${esc(g.away)} injuries</span><span>${injuries("away")}</span></div>
+      <div class="fact"><span class="label">${esc(g.home)} injuries</span><span>${injuries("home")}</span></div>
+      <div class="fact"><span class="label">Rest</span><span>${esc(g.away)} ${si.oppRest ?? "—"} days · ${esc(g.home)} ${si.rest ?? "—"} days</span></div>
+      <div class="fact"><span class="label">ESPN model</span><span>${c.pred ? `${esc(g.home)} wins ${c.pred.home}%` : "—"}${si.modelMargin != null ? ` · fair line ${esc(g.home)} ${fmtLine(-Math.round(si.modelMargin * 2) / 2)}` : ""}${si.modelFar ? ` <span class="chip news">far from market</span>` : ""}</span></div>
+    </div>` : ""}
+  </div></details>`;
+}
+function leanLabel(g, lean) {
+  const m = g.markets.find(x => x.type === lean.market); if (!m) return "";
+  const sd = m.sides.find(x => x.key === lean.side); return sd ? sd.label + " · " + "●".repeat(lean.conf) + "○".repeat(3 - lean.conf) : "";
+}
+
+/* ---------- record ---------- */
+function stats(list) {
+  const w = list.filter(p => p.result === "W").length, l = list.filter(p => p.result === "L").length;
+  const c = list.filter(p => p.clvProb != null).map(p => p.clvProb);
+  return { n: list.length, w, l, rec: `${w}-${l}`, u: list.reduce((s, p) => s + (p.units || 0), 0), clv: c.length ? c.reduce((a, b) => a + b, 0) / c.length : null, beat: c.length ? c.filter(x => x > 0).length / c.length : null };
+}
+function spark(graded) {
+  if (graded.length < 3) return `<p class="muted" style="font-size:13.5px">The units chart appears after a few graded picks.</p>`;
+  const pts = graded.slice().sort((a, b) => (a.start || "").localeCompare(b.start || "")); let cum = 0;
+  const ys = pts.map(p => (cum += p.units || 0));
+  const lo = Math.min(0, ...ys), hi = Math.max(0, ...ys), W = 600, H = 120, pad = 8;
+  const X = i => pad + i * (W - 2 * pad) / Math.max(1, ys.length - 1), Y = v => H - pad - (v - lo) * (H - 2 * pad) / Math.max(0.01, hi - lo);
+  const d = ys.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Cumulative units ${signed(cum, 2)}">
+    <line x1="0" x2="${W}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--line)" stroke-dasharray="4 4"/>
+    <path d="${d}" fill="none" stroke="var(--gold)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+    <circle cx="${X(ys.length - 1)}" cy="${Y(cum)}" r="4" fill="var(--gold)"/></svg>
+    <p class="muted" style="font-size:12.5px">Cumulative units, 1 unit per pick, ${graded.length} graded picks · now ${signed(cum, 2)}</p>`;
+}
+function renderRecord() {
+  const all = Object.values(state.data.picks || {}).sort((a, b) => (b.start || "").localeCompare(a.start || "") || b.score - a.score);
+  const graded = all.filter(p => p.result), S = stats(graded), pu = graded.filter(p => p.result === "P").length;
+  const winPct = (S.w + S.l) ? S.w / (S.w + S.l) : null, best = stats(graded.filter(p => p.isBest));
+  const row = (name, r) => `<tr><td>${name}</td><td class="n">${r.n}</td><td class="n">${r.n ? r.rec : "—"}</td><td class="n">${r.n ? signed(r.u, 2) : "—"}</td><td class="n">${r.clv == null ? "—" : signed(r.clv * 100, 1)}</td></tr>`;
+  const band = (lo, hi) => stats(graded.filter(p => p.score >= lo && p.score < hi));
+  const bySig = k => stats(graded.filter(p => (p.signals || {})[k] > 0));
+  return `<div style="display:grid;gap:18px">
+    <div class="section-head"><h2>Record</h2><span class="muted" style="font-size:13px">${all.length} paper picks · ${graded.length} graded</span></div>
+    <div class="tiles">
+      <div class="tile"><span class="label">Record</span><span class="v">${S.w}-${S.l}${pu ? "-" + pu : ""}</span><span class="d">All logged picks</span></div>
+      <div class="tile"><span class="label">Win rate</span><span class="v">${winPct == null ? "—" : pct(winPct, 1)}</span><span class="d">Break-even ≈ 52.4% at −110</span></div>
+      <div class="tile"><span class="label">Units</span><span class="v">${graded.length ? signed(S.u, 2) : "—"}</span><span class="d">1 unit flat per pick</span></div>
+      <div class="tile"><span class="label">Avg CLV</span><span class="v">${S.clv == null ? "—" : signed(S.clv * 100, 1)}</span><span class="d">Points of probability vs the close</span></div>
+      <div class="tile"><span class="label">Beat close</span><span class="v">${S.beat == null ? "—" : pct(S.beat)}</span><span class="d">Share of picks</span></div>
+      <div class="tile"><span class="label">Best bets</span><span class="v">${best.rec}</span><span class="d">The daily pick only</span></div>
+    </div>
+    <div class="card"><div class="section-head"><span style="font-weight:600">Real-money gate: 300 graded picks with positive average CLV</span><span class="mono">${graded.length} / 300</span></div>
+      <div class="bar" role="img" aria-label="${graded.length} of 300"><i style="width:${Math.min(100, graded.length / 3).toFixed(1)}%"></i></div>
+      <p class="muted" style="font-size:13.5px">${graded.length < 300 ? "Too early to judge. Win rate swings wildly over small samples; closing line value settles faster." : S.clv > 0 ? "Gate passed. Review the signal table before any real money." : "Enough picks, but CLV isn't positive. Rework the signals first."}</p></div>
+    <div class="card"><h3>Units over time</h3>${spark(graded)}</div>
+    <div class="card"><h3>What's working</h3>
+      <div class="tbl-wrap"><table class="log"><thead><tr><th>Group</th><th class="n">Picks</th><th class="n">Record</th><th class="n">Units</th><th class="n">Avg CLV</th></tr></thead><tbody>
+        ${row("Score 70+", band(70, 101))}${row("Score 60–69", band(60, 70))}${row("Score 50–59", band(50, 60))}
+        ${Object.keys(SIG).map(k => row(SIG[k][0], bySig(k))).join("")}
+      </tbody></table></div><p class="fine">Each signal's row counts every graded pick where that signal added points. A signal that can't beat the close here gets cut.</p></div>
+    <div class="card"><h3>Pick log</h3>
+      ${all.length ? `<div class="tbl-wrap"><table class="log"><thead><tr><th>Day</th><th>Pick</th><th>Game</th><th class="n">Score</th><th>Taken</th><th class="n">Close</th><th class="n">CLV</th><th>Result</th><th class="n">Units</th></tr></thead><tbody>
+      ${all.map(p => `<tr><td>${dayFmt(p.date, { month: "short", day: "numeric" })}</td><td>${p.isBest ? `<b>${esc(p.label)}</b> <span class="chip gold">Best</span>` : esc(p.label)}</td><td>${esc(p.league)} ${esc(p.matchup)}</td><td class="n">${p.score}</td>
+        <td class="mono">${p.price.venue === "Kalshi" ? "Kalshi " + p.price.cents + "¢" : "DK " + odds(p.price.odds)}</td>
+        <td class="n">${p.closeLine == null ? "—" : (p.market === "spread" ? fmtLine(p.closeLine) : p.closeLine)}</td>
+        <td class="n">${p.clvProb == null ? "—" : signed(p.clvProb * 100, 1)}</td>
+        <td class="${p.result ? "res-" + p.result : "muted"}">${p.result ? ({ W: "Win", L: "Loss", P: "Push" })[p.result] + (p.finalScore ? ` <span class="muted">${esc(p.finalScore)}</span>` : "") : "Pending"}</td>
+        <td class="n">${p.units == null ? "—" : signed(p.units, 2)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">No picks yet. Every side scoring 50+ is logged and graded after the game.</p>`}
+    </div></div>`;
+}
+
+/* ---------- method ---------- */
+function renderMethod() {
+  return `<div class="method">
+    <h2 style="font-size:26px;text-transform:uppercase">Method</h2>
+    <p>Every side of every spread and total gets a score out of 100. Seventy percent comes from market signals: what the money and the prices say. Thirty percent comes from the situation and an analyst read. Each part is scaled to the signals that had data. The best bet is the top side at 60 or more with at least two signals behind it; otherwise the sheet says pass.</p>
+    <div class="weights">
+      <div><span class="w">30</span><span class="t">Reverse line move</span><span class="d">The line moved toward a side fewer than half the bettors are on.</span></div>
+      <div><span class="w">25</span><span class="t">Kalshi agrees</span><span class="d">Kalshi prices the side above DraftKings' no-vig price. Full credit at 5 points. Ignored when Kalshi's quote is over 4¢ wide.</span></div>
+      <div><span class="w">25</span><span class="t">Line move</span><span class="d">Move toward the side since open, against a steam move (NFL 1.5/2, NBA 2/3). Moves over 2.5 steam moves are treated as news and ignored.</span></div>
+      <div><span class="w">20</span><span class="t">Public fade</span><span class="d">Share of bets on the other side, 55% to 80%.</span></div>
+      <div><span class="w sit">20</span><span class="t">ESPN model</span><span class="d">ESPN's matchup predictor turned into a fair spread. Counts edges of 0.5 to 6 points; a bigger gap usually means the model is missing news.</span></div>
+      <div><span class="w sit">15</span><span class="t">Analyst lean</span><span class="d">Only when a written read carries a lean, rated 1 to 3. The automatic reads explain the board and never lean, so they don't change any score.</span></div>
+      <div><span class="w sit">10</span><span class="t">Rest edge</span><span class="d">NBA: opponent on a back-to-back. NFL: three or more extra days of rest.</span></div>
+      <div><span class="w sit">10</span><span class="t">Health edge</span><span class="d">Opponent lists more players out or doubtful.</span></div>
+    </div>
+    <h3 style="font-size:20px">Team chemistry</h3>
+    <p>The strongest research is a 2019 <i>Nature Human Behaviour</i> study from Northwestern. Teams whose players had won together before beat what their talent alone predicted, adding 2 to 7 points of prediction accuracy across the NBA, Premier League, MLB and cricket. The effect was largest in cricket and baseball. The sheet doesn't score chemistry directly yet: that needs lineup history. For now the health edge and the analyst read stand in for it, and a proper shared-minutes chemistry score is on the roadmap.</p>
+    <h3 style="font-size:20px">What the research says about rest</h3>
+    <p>Playing the second night of a back-to-back costs an NBA team about 1.25 points, and the betting market mostly prices that in. The one spot that historically beat the spread is a home team on the second night of a back-to-back against a rested visitor, especially after traveling east. The rest edge targets that spot and is tested like everything else.</p>
+    <ul>
+      <li><b>Best price.</b> Each side shows what DraftKings and Kalshi need you to win to break even. Kalshi's figure adds an assumed taker fee of 7% × price × (1 − price).</li>
+      <li><b>Paper picks.</b> Every side scoring 50+ is logged with its price, then graded with the closing price and the result.</li>
+      <li><b>Closing line value.</b> How far the market moved toward a pick by game time. It's the fastest honest test of an edge.</li>
+      <li><b>Bankroll rules once real money starts.</b> 1 unit = 1% of bankroll, flat; at most 3 units a day; pause after a 20% drawdown.</li>
+    </ul>
+    <p class="fine">Data: DraftKings lines, injuries, rest and ESPN's predictor via ESPN's public API; Kalshi public market data; Action Network's free share-of-bets figures. Paywalled money percentages aren't used. Research: Mukherjee et al., "Prior shared success predicts victory in team competitions," <i>Nature Human Behaviour</i> 3 (2019); Ashman, Bowman &amp; Lambrinos, <i>Journal of Sports Economics</i> 11(6), 2010; inpredictable.com on NBA rest (2012).</p>
+  </div>`;
+}
+
+/* ---------- events + data ---------- */
+document.querySelector(".views").addEventListener("click", e => { const b = e.target.closest("button[data-view]"); if (b) setView(b.dataset.view); });
+$("#main").addEventListener("click", e => {
+  const d = e.target.closest("button[data-date]"); if (d) { state.date = d.dataset.date; render(); return; }
+  const f = e.target.closest("button[data-filter]"); if (f) { state.filter = f.dataset.filter; render(); }
+});
+window.addEventListener("hashchange", () => { const v = location.hash.slice(1); if (["slate", "record", "method"].includes(v) && v !== state.view) setView(v); });
+(async function start() {
+  const v = location.hash.slice(1);
+  setView(["slate", "record", "method"].includes(v) ? v : "slate");
+  try {
+    const r = await fetch("data.json", { cache: "no-store" });
+    if (!r.ok) throw new Error("status " + r.status);
+    state.data = await r.json();
+  } catch (e) { state.error = e.message || "network error"; }
+  render();
+})();
+</script>
+
+</body>
+</html>
