@@ -24,7 +24,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,4 +43,5 @@ jobs:
           git config user.name "sheet-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data.json
+          if [ -f props.json ]; then git add props.json; fi
           if git diff --cached --quiet; then echo "No changes"; else git commit -m "Update data" && git push; fi
