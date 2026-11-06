@@ -1,10 +1,15 @@
 name: Update sheet
 
-# Times are UTC. 17:13 and 23:13 UTC = 9:13 AM and 3:13 PM Pacific (standard time); 07:47 UTC = 11:47 PM Pacific.
+# Times are UTC (Pacific standard time is UTC-8). GitHub often starts scheduled runs 10-40 minutes late.
+#   :13 every hour from 15:00 to 04:00 UTC (7 AM to 8 PM Pacific): refresh
+#   :43 from 22:00 to 04:00 UTC every day: extra refreshes before NBA tip-offs
+#   :43 from 16:00 to 21:00 UTC on Sundays: extra refreshes before the NFL afternoon games
+#   07:47 UTC (11:47 PM Pacific): grade
 on:
   schedule:
-    - cron: "13 17 * * *"
-    - cron: "13 23 * * *"
+    - cron: "13 0-4,15-23 * * *"
+    - cron: "43 0-4,22,23 * * *"
+    - cron: "43 16-21 * * 0"
     - cron: "47 7 * * *"
   workflow_dispatch:
     inputs:
@@ -45,4 +50,5 @@ jobs:
           git add data.json
           if [ -f props.json ]; then git add props.json; fi
           if [ -f results.json ]; then git add results.json; fi
-          if git diff --cached --quiet; then echo "No changes"; else git commit -m "Update data" && git push; fi
+          if [ -f calib.json ]; then git add calib.json; fi
+          if git diff --cached --quiet; then echo "No changes"; else git commit -m "Update data" && (git push || (git pull --rebase -X theirs && git push)); fi
