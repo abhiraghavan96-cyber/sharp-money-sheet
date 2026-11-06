@@ -515,6 +515,104 @@ def parse_tickets(games):
     return out
 
 
+# ---------- sportsbook consensus (Action Network's free odds feed) ----------
+AN_ODDS = "https://api.actionnetwork.com/web/v2/scoreboard/{lg}?bookIds={books}&date={d}&periods=event"
+BOOKS = {68: "DraftKings", 69: "FanDuel", 75: "BetMGM", 79: "bet365", 123: "Caesars", 71: "BetRivers", 2988: "Fanatics", 247: "Unibet"}
+
+
+def book_odds(lg, dates):
+    """Current full-game spread, total and moneyline at eight US sportsbooks."""
+    out, seen = [], set()
+    for day in dates:
+        try:
+            j = get(AN_ODDS.format(lg=lg, books=",".join(map(str, BOOKS)), d=day))
+        except Exception as e:  # noqa: BLE001
+            print("action network odds failed", lg, day, e)
+            continue
+        for g in j.get("games") or []:
+            if g.get("id") in seen or g.get("status") == "complete":
+                continue
+            seen.add(g.get("id"))
+            ab = lambda tid: next((t.get("abbr") for t in g.get("teams", []) if t.get("id") == tid), None)
+            books = {}
+            for bid, m in (g.get("markets") or {}).items():
+                name = BOOKS.get(int(bid)) if str(bid).isdigit() else None
+                if not name:
+                    continue
+                e = (m or {}).get("event") or {}
+
+                def pick(arr, side, with_line=True):
+                    x = next((y for y in (arr or []) if y.get("side") == side and y.get("odds") is not None), None)
+                    if not x or (with_line and x.get("value") is None):
+                        return None
+                    return [x["value"], x["odds"]] if with_line else x["odds"]
+                b = {}
+                sh, sa = pick(e.get("spread"), "home"), pick(e.get("spread"), "away")
+                if sh and sa:
+                    b["spread"] = {"home": sh, "away": sa}
+                to, tu = pick(e.get("total"), "over"), pick(e.get("total"), "under")
+                if to and tu:
+                    b["total"] = {"over": to, "under": tu}
+                mh, ma = pick(e.get("moneyline"), "home", False), pick(e.get("moneyline"), "away", False)
+                if mh and ma:
+                    b["ml"] = {"home": mh, "away": ma}
+                if b:
+                    books[name] = b
+            if books:
+                out.append({"away": ab(g.get("away_team_id")), "home": ab(g.get("home_team_id")), "start": g.get("start_time"), "books": books})
+    return out
+
+
+# ---------- results for grading paper trades (final scores and box scores) ----------
+def box(lg, gid):
+    s = get(f"https://site.api.espn.com/apis/site/v2/sports/{SPORT[lg]}/{lg}/summary?event={gid}", tries=2)
+    rows = {}
+    for t in (s.get("boxscore") or {}).get("players") or []:
+        for cat in t.get("statistics") or []:
+            keys = cat.get("keys") or []
+            for a in cat.get("athletes") or []:
+                aid = (a.get("athlete") or {}).get("id")
+                if not aid or a.get("didNotPlay") or not a.get("stats"):
+                    continue
+                d = dict(zip(keys, a["stats"]))
+                if lg == "nba":
+                    rows[aid] = [stat_num(d.get("points")), stat_num(d.get("rebounds")), stat_num(d.get("assists")),
+                                 stat_num(d.get("threePointFieldGoalsMade-threePointFieldGoalsAttempted"))]
+                else:
+                    r = rows.setdefault(aid, [0, 0, 0, 0])
+                    if cat.get("name") == "passing":
+                        r[0] = stat_num(d.get("passingYards"))
+                    elif cat.get("name") == "rushing":
+                        r[1] = stat_num(d.get("rushingYards"))
+                    elif cat.get("name") == "receiving":
+                        r[2], r[3] = stat_num(d.get("receivingYards")), stat_num(d.get("receptions"))
+    return rows
+
+
+def results(games):
+    """Finished (or called-off) games not yet in results.json, with player box scores."""
+    known = {}
+    try:
+        known = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results.json"))).get("games", {})
+    except Exception:  # noqa: BLE001
+        pass
+    out = {}
+    for g in games:
+        st = g.get("status")
+        if st not in ("STATUS_FINAL", "STATUS_POSTPONED", "STATUS_CANCELED") or (g["id"] in known and known[g["id"]].get("status") == st):
+            continue
+        r = {"lg": g["league"], "date": g["date"], "start": g["start"], "status": st, "away": g["away"], "home": g["home"]}
+        if st == "STATUS_FINAL":
+            r["as"], r["hs"] = g["awayScore"], g["homeScore"]
+            try:
+                r["p"] = box(g["league"].lower(), g["id"])
+            except Exception as e:  # noqa: BLE001
+                print("espn box score failed", g["id"], e)
+                continue
+        out[g["id"]] = r
+    return out
+
+
 def main():
     mode, d = sys.argv[1], sys.argv[2]
     os.makedirs(d, exist_ok=True)
@@ -523,8 +621,15 @@ def main():
     games = espn([x.strftime("%Y%m%d") for x in days])
     json.dump(games, open(os.path.join(d, "espn.json"), "w"))
     print("espn games", len(games))
+    res = results(games)
+    json.dump(res, open(os.path.join(d, "results_new.json"), "w"), separators=(",", ":"))
+    print("new results", len(res))
     if mode != "refresh":
         return
+    for lg in ("nba", "nfl"):
+        bo = book_odds(lg, [x.strftime("%Y%m%d") for x in days])
+        json.dump(bo, open(os.path.join(d, f"books_{lg}.json"), "w"))
+        print("sportsbook odds", lg, len(bo), "games")
     json.dump(context(games), open(os.path.join(d, "context.json"), "w"))
     codes = [f"{x.strftime('%y')}{MONTHS[x.month - 1]}{x.strftime('%d')}" for x in days]
     for lg in ("nba", "nfl"):

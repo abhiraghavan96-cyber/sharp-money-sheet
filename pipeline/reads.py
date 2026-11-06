@@ -64,7 +64,8 @@ def kalshi_line(g):
                     best = s
     if not best:
         return 0, None
-    return 7, f"Kalshi prices {best['label']} at {best['kalshiProb'] * 100:.1f}%, {best['kalshiGap'] * 100:.1f} points above DraftKings."
+    ref = "the sportsbooks' consensus" if best.get("consensus") else "DraftKings"
+    return 7, f"Kalshi prices {best['label']} at {best['kalshiProb'] * 100:.1f}%, {best['kalshiGap'] * 100:.1f} points above {ref}."
 
 
 def model_line(g):

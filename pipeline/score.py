@@ -43,6 +43,65 @@ def fmt_line(x):
     return ("+" if x > 0 else "-") + s
 
 
+CONS_SLOPE = {("NBA", "spread"): 0.03, ("NBA", "total"): 0.02, ("NFL", "spread"): 0.03, ("NFL", "total"): 0.025}
+CONS_MAXDIFF = {("NBA", "spread"): 3.0, ("NBA", "total"): 6.0, ("NFL", "spread"): 3.0, ("NFL", "total"): 4.0}
+CONS_MIN_BOOKS = 3
+
+
+def dec(o):
+    o = float(o)
+    return 1 + (100 / -o if o < 0 else o / 100)
+
+
+def consensus(g, mtype, key, other, line):
+    """Median no-vig probability across sportsbooks for this side at the board's line.
+    A book hanging a different line is shifted by a per-point slope; books far off the board line (bad data) are dropped."""
+    lg, probs, best = g["league"], [], None
+    for name, b in (g.get("books") or {}).items():
+        m = b.get(mtype)
+        if not m or key not in m or other not in m:
+            continue
+        (bl, bo), (_, oo) = m[key], m[other]
+        try:
+            p = imp(bo) / (imp(bo) + imp(oo))
+        except (ZeroDivisionError, ValueError, TypeError):
+            continue
+        diff = (line - bl) if (mtype == "spread" or key == "under") else (bl - line)
+        if abs(line - bl) > CONS_MAXDIFF[(lg, mtype)]:
+            continue
+        probs.append(clamp(p + diff * CONS_SLOPE[(lg, mtype)], 0.01, 0.99))
+        if abs(bl - line) < 1e-9 and (best is None or dec(bo) > dec(best["odds"])):
+            best = {"book": name, "odds": bo}
+    if len(probs) < CONS_MIN_BOOKS:
+        return None
+    probs.sort()
+    n = len(probs)
+    med = probs[n // 2] if n % 2 else (probs[n // 2 - 1] + probs[n // 2]) / 2
+    return {"prob": round(med, 4), "books": n, "best": best}
+
+
+def ml_consensus(g):
+    """Moneyline: median no-vig win probability and best price per side."""
+    out = {}
+    for key, other in (("home", "away"), ("away", "home")):
+        probs, best = [], None
+        for name, b in (g.get("books") or {}).items():
+            m = b.get("ml")
+            if not m:
+                continue
+            try:
+                probs.append(imp(m[key]) / (imp(m[key]) + imp(m[other])))
+            except (ZeroDivisionError, ValueError, TypeError):
+                continue
+            if best is None or dec(m[key]) > dec(best["odds"]):
+                best = {"book": name, "odds": m[key]}
+        if len(probs) >= CONS_MIN_BOOKS:
+            probs.sort()
+            n = len(probs)
+            out[key] = {"prob": round(probs[n // 2] if n % 2 else (probs[n // 2 - 1] + probs[n // 2]) / 2, 4), "books": n, "best": best}
+    return out or None
+
+
 def side_eval(g, mtype, key, other):
     lg = g["league"]
     m = g[mtype]
@@ -87,7 +146,9 @@ def side_eval(g, mtype, key, other):
     if kcost is not None:
         kfee = FEE_RATE * kcost * (1 - kcost)
         kbe = kcost + kfee
-    gap = (kp - dk_fair) if kp is not None else None
+    cons = consensus(g, mtype, key, other, line)
+    fair = cons["prob"] if cons else dk_fair      # the books' consensus is the fair price when available
+    gap = (kp - fair) if kp is not None else None
 
     t = g.get("tickets")
     tickets = t.get(key) if t else None
@@ -127,6 +188,7 @@ def side_eval(g, mtype, key, other):
         "kalshiFee": None if kfee is None else round(kfee, 4),
         "kalshiBreakEven": None if kbe is None else round(kbe, 4),
         "kalshiLiquid": liquid, "kalshiGap": None if gap is None else round(gap, 4),
+        "consensus": cons,
         "bestVenue": venue,
         "tickets": tickets, "move": toward, "newsMove": news,
         "signals": dict(sig, **sit), "availMax": avail, "marketScore": market_score,
@@ -309,6 +371,7 @@ def build(raw, prev=None):
         game["ctx"] = g.get("ctx")
         game["note"] = g.get("note")
         game["power"] = power(g)
+        game["ml"] = ml_consensus(g)
         game["rating"] = g.get("rating")
         game["wx"] = g.get("wx")
         game["hasLines"] = bool(mk)

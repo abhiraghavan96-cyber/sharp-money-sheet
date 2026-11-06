@@ -40,6 +40,7 @@ def main():
     tickets = (load(d, "tickets_nba.json") or []) + (load(d, "tickets_nfl.json") or [])
     ctx = load(d, "context.json") or {}
     notes = load(d, "notes.json") or {}
+    books = (load(d, "books_nba.json") or []) + (load(d, "books_nfl.json") or [])
     stand = load(d, "standings.json") or {}
     wx = load(d, "weather.json") or {}
     lg_avg = {lg: sum(t["pf"] for t in st.values()) / len(st) for lg, st in stand.items() if st}
@@ -72,6 +73,13 @@ def main():
                 if all(v is not None for v in vals.values()):
                     r["tickets"] = dict(vals, bets=t.get("bets"))
                 break
+        for b in books:
+            if (b.get("start") or "")[:16] != g["start"][:16]:
+                continue
+            bh, ba = TICKET_ALIAS.get(b["home"], b["home"]), TICKET_ALIAS.get(b["away"], b["away"])
+            if bh == g["home"] or ba == g["away"]:
+                r["books"] = b["books"]
+                break
         if ctx.get(g["id"]):
             r["ctx"] = ctx[g["id"]]
         st = stand.get(lg) or {}
@@ -89,7 +97,8 @@ def main():
     json.dump(raw, open(out_raw, "w"))
     json.dump(finals, open(out_finals, "w"))
     print("games", len(games), "with kalshi spread", sum(1 for g in games if g.get("kSpread")),
-          "kalshi total", sum(1 for g in games if g.get("kTotal")), "tickets", sum(1 for g in games if g.get("tickets")))
+          "kalshi total", sum(1 for g in games if g.get("kTotal")), "tickets", sum(1 for g in games if g.get("tickets")),
+          "books", sum(1 for g in games if g.get("books")))
 
 
 if __name__ == "__main__":

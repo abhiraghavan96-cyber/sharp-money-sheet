@@ -5,7 +5,7 @@ python3 pipeline/run.py grade     # pull final scores; grade open picks; update 
 Run from the repository root. Uses only the Python standard library.
 """
 import json, os, shutil, subprocess, sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -46,6 +46,30 @@ def main():
             with open(os.path.join(ROOT, "props.json"), "w") as f:
                 json.dump(pr, f, separators=(",", ":"))
             print("props.json", len(pr.get("players", [])), "players")
+    update_results(w("in", "results_new.json"), now)
+
+
+RESULTS_DAYS = 14
+
+
+def update_results(src, now):
+    """Fold newly finished games into results.json (final scores and box scores the app grades paper trades with)."""
+    if not os.path.exists(src):
+        return
+    with open(src) as f:
+        new = json.load(f)
+    dst = os.path.join(ROOT, "results.json")
+    cur = {"games": {}}
+    if os.path.exists(dst):
+        with open(dst) as f:
+            cur = json.load(f)
+    cur.setdefault("games", {}).update(new)
+    cutoff = (datetime.strptime(now[:10], "%Y-%m-%d") - timedelta(days=RESULTS_DAYS)).strftime("%Y-%m-%d")
+    cur["games"] = {k: v for k, v in cur["games"].items() if v.get("date", "9999") >= cutoff}
+    cur["updatedAt"] = now
+    with open(dst, "w") as f:
+        json.dump(cur, f, separators=(",", ":"))
+    print("results.json", len(cur["games"]), "games,", len(new), "new")
 
 
 if __name__ == "__main__":
