@@ -340,7 +340,7 @@ def situation(g, mtype, key):
     return sig, avail, info
 
 
-SD_TOTAL = {"NBA": 18.0, "NFL": 13.5, "NCAAB": 15.5}
+SD_TOTAL = {"NBA": 18.0, "NFL": 13.5, "NCAAB": 17.0}   # college: 16.9 measured on 4,166 games
 
 
 def model_probs(g, sp, tt):

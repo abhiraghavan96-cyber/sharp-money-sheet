@@ -15,7 +15,7 @@ Writes model.json. Python standard library only.
 Both models are ridge regressions pulled toward the priors in score.py, so they move only as far as the data earns.
 Each is checked on the most recent quarter of games, which the fit never saw.
 """
-import json, math, os, sys
+import bisect, json, math, os, sys
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -27,6 +27,7 @@ PRO = ("NBA", "NFL")                      # the main sheet's leagues: one shared
 COLLEGE = ("NCAAB",)                      # watch-only: fitted separately into model.json "college", never mixed into PRO
 RATING_RIDGE = 2.0                        # each team's rating starts as if it had two average games
 MIN_GAMES = 4                             # a team needs this many games before its rating is used
+SEASON_DAYS = 150                         # college: only games in the last 150 days count toward MIN_GAMES (this season, not last)
 INTERCEPT_STRENGTH = 5.0                  # a blanket home or over bias needs five times the evidence of a real input
 
 
@@ -111,7 +112,7 @@ class SparseRatings:
     def __init__(self, games, lg):
         self.lg = lg
         self.gs = sorted((g for g in games if g["lg"] == lg), key=lambda g: g["date"])
-        self.i, self.cur, self.count = 0, None, {}
+        self.i, self.cur, self.count, self.dates = 0, None, {}, {}
         self.A = {"sp": {}, "tot": {}}
         self.b = {"sp": {}, "tot": {}}
         self.m = {"sp": 0, "tot": 0}
@@ -161,13 +162,17 @@ class SparseRatings:
             self.i += 1
             w = 0.5 ** (days_between(g["date"], asof) / HALF_LIFE[self.lg])
             for t in (g["home"], g["away"]):
-                self.count[t] = self.count.get(t, 0) + 1
+                self.dates.setdefault(t, []).append(g["date"])
             if g.get("sp"):
                 self._add("sp", [(self.C, 0.0 if g.get("neutral") else 1.0), (g["home"], 1.0), (g["away"], -1.0)], -g["sp"][1], w)
                 self.m["sp"] += 1
             if g.get("tot"):
                 self._add("tot", [(self.C, 1.0), (g["home"], 1.0), (g["away"], 1.0)], g["tot"][1], w)
                 self.m["tot"] += 1
+        # games this season only: last season's games still shape the rating a little (heavily decayed), but a team
+        # needs MIN_GAMES of its own this season before the rating is used, as in the NBA and NFL
+        cutoff = (datetime.strptime(asof, "%Y-%m-%d") - timedelta(days=SEASON_DAYS)).strftime("%Y-%m-%d")
+        self.count = {t: len(ds) - bisect.bisect_left(ds, cutoff) for t, ds in self.dates.items()}
         teams = sorted(self.count)
         out = None
         if self.i >= 10 and len(teams) >= 4:

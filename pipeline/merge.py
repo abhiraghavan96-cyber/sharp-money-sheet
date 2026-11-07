@@ -113,12 +113,17 @@ def match_kalshi(kf, g):
     return None, None
 
 
+KALSHI_USED = set()   # college Kalshi events some game matched (the rest are logged)
+
+
 def college_fill(r, g, kc, tickets, books, ctx):
     """Kalshi, public bets, sportsbook prices and ESPN context for one college game."""
     if g.get("spread"):
         r["spread"] = g["spread"]
         fav = "home" if g["spread"]["home"][2] < 0 else "away"
         key, codes = match_kalshi(kc.get("spread"), g)
+        if key:
+            KALSHI_USED.add(key)
         if key and codes and codes.get(fav) and codes[fav] in kc["spread"]["o"][key]:
             r["kSpread"] = {"fav": fav, "q": kc["spread"]["o"][key][codes[fav]]}
     if g.get("total"):
@@ -126,6 +131,7 @@ def college_fill(r, g, kc, tickets, books, ctx):
         key, _ = match_kalshi(kc.get("total"), g)
         if key:
             r["kTotal"] = kc["total"]["o"][key]
+            KALSHI_USED.add(key)
     t, rev = match_an(tickets, g)
     if t:
         vals = {"home": t.get("away_t" if rev else "home_t"), "away": t.get("home_t" if rev else "away_t"), "over": t.get("over_t"), "under": t.get("under_t")}
@@ -216,6 +222,11 @@ def main():
         "tickets": "Action Network consensus share of bets (free figures only)"}, "games": games}
     json.dump(raw, open(out_raw, "w"))
     json.dump(finals, open(out_finals, "w"))
+    for m in ("spread", "total"):   # college Kalshi events no game matched, to tune the name matching
+        kf = kc.get(m) or {}
+        miss = [f"{k}: {(kf.get('t') or {}).get(k)} {list(((kf.get('names') or {}).get(k) or {}).items())}" for k in (kf.get("o") or {}) if k not in KALSHI_USED]
+        if miss:
+            print("college kalshi", m, "unmatched", len(miss), "|", " ; ".join(miss[:25]))
     for label, sel in (("games", lambda g: g["league"] not in COLLEGE), ("college games", lambda g: g["league"] in COLLEGE)):
         gs = [g for g in games if sel(g)]
         print(label, len(gs), "with lines", sum(1 for g in gs if g.get("spread") or g.get("total")), "kalshi spread", sum(1 for g in gs if g.get("kSpread")),
