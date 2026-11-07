@@ -75,63 +75,90 @@ def match_an(entries, g):
     return None, False
 
 
-def kalshi_title_names(title):
-    t = re.split(r":", title or "")[0]
-    parts = re.split(r"\s+(?:at|vs\.?|@)\s+", t, flags=re.I)
-    return [p.strip() for p in parts] if len(parts) == 2 else None
+def kalshi_index(kc, games):
+    """Match college Kalshi events to ESPN games once per run. Kalshi's market titles aren't matchups ("Little Rock
+    wins by over 8.5 points"), its team codes often differ from ESPN's (UALR, MOH) and it sometimes lists the home team
+    first, so an event matches a game by (1) both ESPN codes in either order, (2) a spread market's team name, or
+    (3) one ESPN code at the start or end of the event code, the last only when exactly one game fits.
+    Totals reuse the spread event with the same event code. Returns {"spread": {gid: (key, codes)}, "total": {gid: key}}."""
+    def dcode(x):
+        return f"{x.strftime('%y')}{MONTHS[x.month - 1]}{x.strftime('%d')}"
+    by_dc = {}
+    for g in games:
+        d = datetime.strptime(g["date"], "%Y-%m-%d")
+        for x in (d - timedelta(days=1), d, d + timedelta(days=1)):
+            by_dc.setdefault(dcode(x), []).append(g)
+    sp, tot = kc.get("spread") or {}, kc.get("total") or {}
+    names = sp.get("names") or {}
 
-
-def match_kalshi(kf, g):
-    """(event key, {"home": code, "away": code} or None) for this game in one Kalshi college file, or (None, None)."""
-    if not kf or not kf.get("o"):
-        return None, None
-    d = datetime.strptime(g["date"], "%Y-%m-%d")
-    dcodes = {f"{x.strftime('%y')}{MONTHS[x.month - 1]}{x.strftime('%d')}" for x in (d - timedelta(days=1), d, d + timedelta(days=1))}
-    for key in kf["o"]:
+    def find(key):
         dc, teams = key[:7], key[7:]
-        if dc not in dcodes:
-            continue
-        if teams == g["away"] + g["home"]:
-            return key, {"away": g["away"], "home": g["home"]}
-        nm = kalshi_title_names((kf.get("t") or {}).get(key))
-        if not nm:
-            continue
-        a_n, h_n = nm
-        if (same_team(None, [a_n], None, g.get("awayNames")) and same_team(None, [h_n], None, g.get("homeNames"))) or \
-           (same_team(None, [a_n], None, g.get("homeNames")) and same_team(None, [h_n], None, g.get("awayNames"))):
-            codes = {}
-            for code, name in ((kf.get("names") or {}).get(key) or {}).items():
-                for side in ("home", "away"):
-                    if same_team(None, [name], None, g.get(side + "Names")):
-                        codes[side] = code
-            for side, pos in (("away", "start"), ("home", "end")):   # fall back to where a code sits in the event name
-                if side not in codes:
-                    for code in (kf["o"][key] if isinstance(kf["o"][key], dict) else {}):
-                        if (teams.startswith(code) if pos == "start" else teams.endswith(code)) and code not in codes.values():
-                            codes[side] = code
-            return key, codes
-    return None, None
+        cands = by_dc.get(dc, [])
+        hit = [g for g in cands if teams in (g["away"] + g["home"], g["home"] + g["away"])]
+        if len(hit) == 1:
+            return hit[0]
+        hit = {g["id"]: g for g in cands for name in (names.get(key) or {}).values()
+               if same_team(None, [name], None, g.get("homeNames")) or same_team(None, [name], None, g.get("awayNames"))}
+        if len(hit) == 1:
+            return next(iter(hit.values()))
+        hit = [g for g in cands if any(len(x) >= 3 and (teams.startswith(x) or teams.endswith(x)) for x in (g["away"], g["home"]))]
+        return hit[0] if len(hit) == 1 else None
+
+    def side_codes(key, g):
+        teams, codes = key[7:], {}
+        for code, name in (names.get(key) or {}).items():
+            for side in ("home", "away"):
+                if same_team(None, [name], None, g.get(side + "Names")):
+                    codes[side] = code
+        for code in (sp.get("o") or {}).get(key) or {}:
+            for side in ("home", "away"):
+                if side not in codes and code == g[side]:
+                    codes[side] = code
+        # a code still unplaced: the side opposite a placed code at the other end of the event code
+        for code in (sp.get("o") or {}).get(key) or {}:
+            if code in codes.values():
+                continue
+            for side, other in (("home", "away"), ("away", "home")):
+                oc = codes.get(other)
+                if side not in codes and oc and ((teams.startswith(oc) and teams.endswith(code)) or (teams.startswith(code) and teams.endswith(oc))):
+                    codes[side] = code
+        return codes
+
+    out, taken = {"spread": {}, "total": {}}, set()
+    for key in (sp.get("o") or {}):
+        g = find(key)
+        if g and g["id"] not in out["spread"]:
+            out["spread"][g["id"]] = (key, side_codes(key, g))
+            taken.add(key)
+    spread_key_game = {k: gid for gid, (k, _) in out["spread"].items()}
+    for key in (tot.get("o") or {}):
+        gid = spread_key_game.get(key)
+        if not gid:
+            g = find(key)
+            gid = g["id"] if g else None
+        if gid and gid not in out["total"]:
+            out["total"][gid] = key
+            taken.add(key)
+    KALSHI_USED.update(taken)
+    return out
 
 
 KALSHI_USED = set()   # college Kalshi events some game matched (the rest are logged)
 
 
-def college_fill(r, g, kc, tickets, books, ctx):
+def college_fill(r, g, kc, kix, tickets, books, ctx):
     """Kalshi, public bets, sportsbook prices and ESPN context for one college game."""
     if g.get("spread"):
         r["spread"] = g["spread"]
         fav = "home" if g["spread"]["home"][2] < 0 else "away"
-        key, codes = match_kalshi(kc.get("spread"), g)
-        if key:
-            KALSHI_USED.add(key)
+        key, codes = kix["spread"].get(g["id"], (None, None))
         if key and codes and codes.get(fav) and codes[fav] in kc["spread"]["o"][key]:
             r["kSpread"] = {"fav": fav, "q": kc["spread"]["o"][key][codes[fav]]}
     if g.get("total"):
         r["total"] = g["total"]
-        key, _ = match_kalshi(kc.get("total"), g)
+        key = kix["total"].get(g["id"])
         if key:
             r["kTotal"] = kc["total"]["o"][key]
-            KALSHI_USED.add(key)
     t, rev = match_an(tickets, g)
     if t:
         vals = {"home": t.get("away_t" if rev else "home_t"), "away": t.get("home_t" if rev else "away_t"), "over": t.get("over_t"), "under": t.get("under_t")}
@@ -162,6 +189,11 @@ def main():
     kc = {m: load(d, f"kalshi_ncaab_{m}.json") for m in ("spread", "total")}
     tickets_c, books_c = load(d, "tickets_ncaab.json") or [], load(d, "books_ncaab.json") or []
     ctx_c = load(d, "context_college.json") or {}
+    try:
+        kix = kalshi_index(kc, [g for g in espn if g["league"] in COLLEGE])
+    except Exception as e:  # noqa: BLE001
+        print("college kalshi matching failed", e)
+        kix = {"spread": {}, "total": {}}
     games, finals = [], []
     for g in espn:
         lg = g["league"]
@@ -172,7 +204,7 @@ def main():
         r["neutral"] = bool(g.get("neutral"))
         if lg in COLLEGE:
             try:
-                college_fill(r, g, kc, tickets_c, books_c, ctx_c)
+                college_fill(r, g, kc, kix, tickets_c, books_c, ctx_c)
                 games.append(r)
             except Exception as e:  # noqa: BLE001  (watch-only: a bad college row is dropped, never the run)
                 print("college merge failed", g.get("id"), e)
