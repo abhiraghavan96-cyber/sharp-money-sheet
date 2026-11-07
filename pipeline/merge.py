@@ -51,6 +51,7 @@ def main():
         if g.get("status") not in (None, "STATUS_SCHEDULED"):
             pass  # started or final: score.py freezes it from the previous slate
         r = {x: g[x] for x in ("league", "date", "id", "start", "away", "awayName", "home", "homeName")}
+        r["neutral"] = bool(g.get("neutral"))
         if g.get("spread"):
             r["spread"] = g["spread"]
             fav = "home" if g["spread"]["home"][2] < 0 else "away"

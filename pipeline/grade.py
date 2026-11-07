@@ -10,14 +10,17 @@ closing line, and what happened (res 1 or 0; pushes are left out).
 
 Closing price = the game's last pre-game snapshot in its slate (games freeze at start time).
 CLV (clvProb) = closing win probability at the line you took minus the break-even you paid.
-Closing probability at your line comes from Kalshi's closing ladder when it is liquid; otherwise
-DraftKings' closing no-vig probability, shifted by a per-point slope when the line moved.
+Closing probability at your line comes from the sportsbooks' closing consensus (median no-vig across eight books),
+moved to your line along the simulator's bell curve; failing that Kalshi's closing ladder, then DraftKings alone.
+Also writes out_dir/moves/<gameId>-<market>-<window>.json: the move model's training rows (see learn.py).
 """
 import json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from score import interp, imp, KALSHI_MAX_WIDTH, model_probs
+from score import interp, imp, KALSHI_MAX_WIDTH, model_probs, at_line, MOVE_FEATS
 
-CALIB_SOURCES = ("cons", "dk", "kalshi", "espn", "power", "blend")
+CALIB_SOURCES = ("cons", "dk", "kalshi", "espn", "power", "blend", "rating", "fair", "rest", "health", "wind")
+MOVES_COLS = ["date", "league", "market", "bucket", "hours", "y"] + MOVE_FEATS
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SLOPE = {("NFL", "spread"): 0.03, ("NFL", "total"): 0.025, ("NBA", "spread"): 0.03, ("NBA", "total"): 0.02}
 
@@ -28,6 +31,8 @@ def close_prob(game, pick):
         return None, None
     side = next(s for s in m["sides"] if s["key"] == pick["side"])
     taken = pick["line"]
+    if side.get("consensus"):   # the sportsbooks' closing consensus, moved to the line you took
+        return clamp01(at_line(side["consensus"]["prob"], side["line"], taken, pick["market"], pick["side"], game["league"])), side["line"]
     k = (game.get("kalshi") or {}).get(pick["market"])
     if k:
         if pick["market"] == "spread":
@@ -44,12 +49,11 @@ def close_prob(game, pick):
                 p = r[0] if pick["side"] == "over" else 1 - r[0]
                 return p, side["line"]
     # DraftKings fallback
-    p = side["dkFair"]
-    diff = taken - side["line"]  # spread: + means you hold more points than the close
-    if pick["market"] == "total":
-        diff = (side["line"] - taken) if pick["side"] == "over" else (taken - side["line"])
-    p += diff * SLOPE[(game["league"], pick["market"])]
-    return max(0.01, min(0.99, p)), side["line"]
+    return clamp01(at_line(side["dkFair"], side["line"], taken, pick["market"], pick["side"], game["league"])), side["line"]
+
+
+def clamp01(p):
+    return max(0.01, min(0.99, p))
 
 
 def result(pick, away, home):
@@ -104,6 +108,7 @@ def main():
         print(f[:-5], upd)
     print("graded", n)
     calib(finals, slates, out)
+    moves(slates, out)
 
 
 def pregame(g):
@@ -139,6 +144,35 @@ def calib(finals, slates, out):
                 json.dump(row, open(os.path.join(out, "calib", f"{g['id']}-{mt}.json"), "w"))
                 n += 1
     print("calibration rows", n)
+
+
+def moves(slates, out):
+    """Move-model rows: each snapshot the sheet kept for a game (inputs some hours out) against where the
+    consensus closed, at the snapshot's line."""
+    try:
+        snaps = json.load(open(os.path.join(ROOT, "snaps.json"))).get("games", {})
+    except Exception:  # noqa: BLE001
+        snaps = {}
+    os.makedirs(os.path.join(out, "moves"), exist_ok=True)
+    n = 0
+    for date, sl in slates.items():
+        for g in sl.get("games", []):
+            sn = snaps.get(g["id"])
+            if not sn or not g.get("frozen") or not g.get("markets") or not pregame(g):
+                continue
+            for sk, snap in sn.items():
+                mt, b = sk.split("|")
+                m = next((x for x in g["markets"] if x["type"] == mt), None)
+                key = "home" if mt == "spread" else "over"
+                side = next((x for x in (m or {}).get("sides", []) if x["key"] == key), None)
+                if not side:
+                    continue
+                pc = side["consensus"]["prob"] if side.get("consensus") else side["dkFair"]
+                y = at_line(pc, side["line"], snap["L"], mt, key, g["league"]) - snap["p"]
+                row = [date, g["league"], mt, b, snap["h"], round(y, 4)] + [snap["x"].get(f) for f in MOVE_FEATS]
+                json.dump(row, open(os.path.join(out, "moves", f"{g['id']}-{mt}-{b}.json"), "w"))
+                n += 1
+    print("move rows", n)
 
 
 if __name__ == "__main__":

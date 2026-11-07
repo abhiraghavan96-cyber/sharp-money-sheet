@@ -1,7 +1,8 @@
 """One scheduled run of the Sharp Money Sheet, start to finish.
 
 python3 pipeline/run.py refresh   # pull lines, prices, bets and context; score; write reads; update data.json
-python3 pipeline/run.py grade     # pull final scores; grade open picks; update data.json
+python3 pipeline/run.py grade     # pull final scores; grade open picks; accuracy and move rows; refit model.json
+python3 pipeline/run.py backfill  # one-off: every finished game this season into hist.json, then refit model.json
 Run from the repository root. Uses only the Python standard library.
 """
 import json, os, shutil, subprocess, sys
@@ -27,6 +28,12 @@ def main():
     w = lambda *p: os.path.join(WORK, *p)
     data = os.path.join(ROOT, "data.json")
 
+    if mode == "backfill":
+        if not skip_fetch:
+            py("fetch.py", "backfill", w("in"))
+        update_hist(w("in", "hist_new.json"), now)
+        py("learn.py", ROOT)
+        return
     py("pack.py", "unpack", data, w("state"))
     if not skip_fetch:
         py("fetch.py", mode, w("in"))
@@ -35,8 +42,10 @@ def main():
         py("grade.py", w("finals.json"), w("state"), w("gradeout"), os.path.join(ROOT, "results.json"))
         py("pack.py", "pack", w("state"), w("none"), w("gradeout"), data, now)
         update_calib(w("gradeout", "calib"), now)
+        update_table("moves.json", MOVES_COLS, w("gradeout", "moves"), now, MOVES_DAYS)
     else:
         py("score.py", w("raw.json"), w("out"), "--prev", w("state"))
+        update_snaps(w("out", "snaps_new.json"), now)
         py("reads.py", w("out", "slates"))
         py("pack.py", "pack", w("state"), w("out"), w("none"), data, now)
         src = w("in", "props.json")
@@ -53,12 +62,75 @@ def main():
                 json.dump(pr, f, separators=(",", ":"))
             print("props.json", len(pr.get("players", [])), "players")
     update_results(w("in", "results_new.json"), now)
+    update_hist(w("in", "hist_new.json"), now)
+    if mode == "grade":
+        py("learn.py", ROOT)
 
 
 RESULTS_DAYS = 14
+SNAPS_DAYS = 10
+MOVES_DAYS = 240
+sys.path.insert(0, HERE)
+from score import MOVE_FEATS  # noqa: E402
+MOVES_COLS = ["date", "league", "market", "bucket", "hours", "y"] + MOVE_FEATS
+
+
+def read_json(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def write_json(name, obj):
+    with open(os.path.join(ROOT, name), "w") as f:
+        json.dump(obj, f, separators=(",", ":"))
+
+
+def update_hist(src, now):
+    """Fold newly finished games into hist.json (DraftKings open/close, score, ESPN's pregame chance) for learn.py."""
+    new = read_json(src, None)
+    if not new:
+        return
+    cur = read_json(os.path.join(ROOT, "hist.json"), {"games": {}})
+    cur.setdefault("games", {}).update(new)
+    cur["updatedAt"] = now
+    write_json("hist.json", cur)
+    print("hist.json", len(cur["games"]), "games,", len(new), "new")
+
+
+def update_snaps(src, now):
+    """Keep the first pre-game snapshot of each game in each time window (12h+, 3-12h, under 3h) for the move model."""
+    new = read_json(src, None)
+    cur = read_json(os.path.join(ROOT, "snaps.json"), {"games": {}})
+    games = cur.setdefault("games", {})
+    for gid, v in (new or {}).items():
+        for k, snap in v.items():
+            games.setdefault(gid, {}).setdefault(k, snap)
+    cutoff = (datetime.strptime(now[:10], "%Y-%m-%d") - timedelta(days=SNAPS_DAYS)).strftime("%Y-%m-%d")
+    cur["games"] = {g: v for g, v in games.items() if max(s["t"] for s in v.values())[:10] >= cutoff}
+    cur["updatedAt"] = now
+    write_json("snaps.json", cur)
+    print("snaps.json", len(cur["games"]), "games,", sum(len(v) for v in (new or {}).values()), "new snapshots")
+
+
+def update_table(name, cols, src, now, days):
+    """Merge a folder of row files (one JSON array each, first field the date) into a {cols, rows} table."""
+    if not os.path.isdir(src):
+        return
+    cur = read_json(os.path.join(ROOT, name), {"cols": cols, "rows": {}})
+    rows, n = cur.get("rows") or {}, 0
+    for f in os.listdir(src):
+        if f.endswith(".json"):
+            rows[f[:-5]] = read_json(os.path.join(src, f), None)
+            n += 1
+    cutoff = (datetime.strptime(now[:10], "%Y-%m-%d") - timedelta(days=days)).strftime("%Y-%m-%d")
+    write_json(name, {"cols": cols, "updatedAt": now, "rows": {k: v for k, v in rows.items() if v and v[0] >= cutoff}})
+    print(name, len(rows), "rows,", n, "from this run")
 CLOSED_DAYS = 5
 CALIB_DAYS = 365
-CALIB_COLS = ["date", "league", "market", "line", "res", "cons", "dk", "kalshi", "espn", "power", "blend"]
+CALIB_COLS = ["date", "league", "market", "line", "res", "cons", "dk", "kalshi", "espn", "power", "blend", "rating", "fair", "rest", "health", "wind"]
 
 
 def closed_ladders(now):

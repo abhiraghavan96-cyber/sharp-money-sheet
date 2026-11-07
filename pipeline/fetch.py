@@ -2,6 +2,8 @@
 
 python3 fetch.py refresh in_dir   -> espn.json, context.json, kalshi_*.json, tickets_*.json
 python3 fetch.py grade in_dir     -> espn.json (yesterday and today, with final scores)
+python3 fetch.py backfill in_dir  -> hist_new.json (every finished game this season not yet in hist.json)
+Refresh and grade also write results_new.json and hist_new.json for games that just finished.
 
 Every source is optional: a source that fails is logged and skipped, and the page shows it as missing.
 """
@@ -54,9 +56,18 @@ def pt_date(d):
     return datetime.fromisoformat(d.replace("Z", "+00:00")).astimezone(PT).strftime("%Y-%m-%d")
 
 
-def espn(dates):
+def oc(x):
+    """[open line, open odds, close line, close odds] from ESPN's {open: {line, odds}, close: {...}}, or None."""
+    if not x or not x.get("close"):
+        return None
+    op = x["open"] if x.get("open") and x["open"].get("line") is not None else x["close"]
+    vals = [num(op.get("line")), num(op.get("odds")), num(x["close"].get("line")), num(x["close"].get("odds"))]
+    return None if any(v is None for v in vals) else vals
+
+
+def espn(dates, leagues=("nba", "nfl")):
     out, seen = [], set()
-    for lg in ("nba", "nfl"):
+    for lg in leagues:
         for d in dates:
             try:
                 j = get(f"https://site.api.espn.com/apis/site/v2/sports/{SPORT[lg]}/{lg}/scoreboard?dates={d}")
@@ -78,14 +89,9 @@ def espn(dates):
                      "away": a["team"]["abbreviation"], "awayName": a["team"]["displayName"], "awayId": a["team"].get("id"),
                      "home": h["team"]["abbreviation"], "homeName": h["team"]["displayName"], "homeId": h["team"].get("id"),
                      "awayScore": float(a.get("score") or 0), "homeScore": float(h.get("score") or 0),
-                     "indoor": v.get("indoor"), "city": ad.get("city"), "state": ad.get("state"), "country": ad.get("country")}
-
-                def q(x):
-                    if not x or not x.get("close"):
-                        return None
-                    op = x["open"] if x.get("open") and x["open"].get("line") is not None else x["close"]
-                    vals = [num(op.get("line")), num(op.get("odds")), num(x["close"].get("line")), num(x["close"].get("odds"))]
-                    return None if any(v is None for v in vals) else vals
+                     "indoor": v.get("indoor"), "city": ad.get("city"), "state": ad.get("state"), "country": ad.get("country"),
+                     "stype": (e.get("season") or {}).get("type"), "neutral": bool(c.get("neutralSite"))}
+                q = oc
                 ps, t = o.get("pointSpread") or {}, o.get("total") or {}
                 if q(ps.get("home")) and q(ps.get("away")):
                     g["spread"] = {"home": q(ps["home"]), "away": q(ps["away"])}
@@ -564,8 +570,43 @@ def book_odds(lg, dates):
 
 
 # ---------- results for grading paper trades (final scores and box scores) ----------
-def box(lg, gid):
-    s = get(f"https://site.api.espn.com/apis/site/v2/sports/{SPORT[lg]}/{lg}/summary?event={gid}", tries=2)
+def summary(lg, gid):
+    return get(f"https://site.api.espn.com/apis/site/v2/sports/{SPORT[lg]}/{lg}/summary?event={gid}", tries=2)
+
+
+def hist_row(g, s):
+    """One finished game for hist.json: DraftKings opening and closing lines (ESPN's pick center), the final score and
+    ESPN's pregame win chance. sp/tot = [open line, close line, close odds (home/over), close odds (away/under), open odds, open odds]."""
+    pcs = s.get("pickcenter") or []
+    pc = next((p for p in pcs if "draft" in ((p.get("provider") or {}).get("name") or "").lower()), pcs[0] if pcs else None)
+    if not pc:
+        return None
+    r = {"lg": g["league"], "date": g["date"], "start": g["start"], "home": g["home"], "away": g["away"],
+         "hs": g["homeScore"], "as": g["awayScore"], "neutral": g.get("neutral", False)}
+    ps, t = pc.get("pointSpread") or {}, pc.get("total") or {}
+    h, a = oc(ps.get("home")), oc(ps.get("away"))
+    if h and a:
+        r["sp"] = [h[0], h[2], h[3], a[3], h[1], a[1]]
+    elif num(pc.get("spread")) is not None:
+        hs, as_ = num((pc.get("homeTeamOdds") or {}).get("spreadOdds")), num((pc.get("awayTeamOdds") or {}).get("spreadOdds"))
+        if hs is not None and as_ is not None:
+            r["sp"] = [num(pc["spread"]), num(pc["spread"]), hs, as_, hs, as_]
+    o, u = oc(t.get("over")), oc(t.get("under"))
+    if o and u:
+        r["tot"] = [o[0], o[2], o[3], u[3], o[1], u[1]]
+    elif num(pc.get("overUnder")) is not None and num(pc.get("overOdds")) is not None and num(pc.get("underOdds")) is not None:
+        r["tot"] = [num(pc["overUnder"]), num(pc["overUnder"]), num(pc["overOdds"]), num(pc["underOdds"]), num(pc["overOdds"]), num(pc["underOdds"])]
+    hm, am = num((pc.get("homeTeamOdds") or {}).get("moneyLine")), num((pc.get("awayTeamOdds") or {}).get("moneyLine"))
+    if hm is not None and am is not None:
+        r["ml"] = [hm, am]
+    wp = (s.get("winprobability") or [{}])[0].get("homeWinPercentage")
+    if wp is not None and 0 < wp < 1:
+        r["wp"] = round(wp, 4)
+    return r if ("sp" in r or "tot" in r) else None
+
+
+def box(lg, gid, s=None):
+    s = s or summary(lg, gid)
     rows = {}
     for t in (s.get("boxscore") or {}).get("players") or []:
         for cat in t.get("statistics") or []:
@@ -589,14 +630,20 @@ def box(lg, gid):
     return rows
 
 
-def results(games):
-    """Finished (or called-off) games not yet in results.json, with player box scores."""
-    known = {}
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def known_ids(name, key="games"):
     try:
-        known = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results.json"))).get("games", {})
+        return json.load(open(os.path.join(ROOT, name))).get(key, {})
     except Exception:  # noqa: BLE001
-        pass
-    out = {}
+        return {}
+
+
+def results(games):
+    """Finished (or called-off) games not yet in results.json, with player box scores; plus history rows for hist.json."""
+    known, hist_known = known_ids("results.json"), known_ids("hist.json")
+    out, hist = {}, {}
     for g in games:
         st = g.get("status")
         if st not in ("STATUS_FINAL", "STATUS_POSTPONED", "STATUS_CANCELED") or (g["id"] in known and known[g["id"]].get("status") == st):
@@ -605,25 +652,61 @@ def results(games):
         if st == "STATUS_FINAL":
             r["as"], r["hs"] = g["awayScore"], g["homeScore"]
             try:
-                r["p"] = box(g["league"].lower(), g["id"])
+                s = summary(g["league"].lower(), g["id"])
+                r["p"] = box(g["league"].lower(), g["id"], s)
+                if g["id"] not in hist_known and g.get("stype") in (2, 3):
+                    h = hist_row(g, s)
+                    if h:
+                        hist[g["id"]] = h
             except Exception as e:  # noqa: BLE001
                 print("espn box score failed", g["id"], e)
                 continue
         out[g["id"]] = r
-    return out
+    return out, hist
+
+
+SEASON_START = {"nba": "2026-10-20", "nfl": "2026-09-09"}
+
+
+def backfill(d):
+    """Every finished regular-season game since the season started that hist.json doesn't have yet."""
+    known, hist = known_ids("hist.json"), {}
+    end = datetime.now(PT).date() - timedelta(days=1)
+    for lg, first in SEASON_START.items():
+        day, dates = datetime.strptime(first, "%Y-%m-%d").date(), []
+        while day <= end:
+            dates.append(day.strftime("%Y%m%d"))
+            day += timedelta(days=1)
+        games = [g for g in espn(dates, (lg,)) if g["status"] == "STATUS_FINAL" and g.get("stype") in (2, 3) and g["id"] not in known]
+        print("backfill", lg, len(dates), "days,", len(games), "finished games to fetch")
+        for g in games:
+            try:
+                h = hist_row(g, summary(lg, g["id"]))
+            except Exception as e:  # noqa: BLE001
+                print("espn summary failed", g["id"], e)
+                continue
+            if h:
+                hist[g["id"]] = h
+            time.sleep(0.15)
+    json.dump(hist, open(os.path.join(d, "hist_new.json"), "w"), separators=(",", ":"))
+    print("history rows", len(hist))
 
 
 def main():
     mode, d = sys.argv[1], sys.argv[2]
     os.makedirs(d, exist_ok=True)
+    if mode == "backfill":
+        backfill(d)
+        return
     today = datetime.now(PT).date()
     days = [today - timedelta(days=1), today] if mode == "grade" else [today, today + timedelta(days=1)]
     games = espn([x.strftime("%Y%m%d") for x in days])
     json.dump(games, open(os.path.join(d, "espn.json"), "w"))
     print("espn games", len(games))
-    res = results(games)
+    res, hist = results(games)
     json.dump(res, open(os.path.join(d, "results_new.json"), "w"), separators=(",", ":"))
-    print("new results", len(res))
+    json.dump(hist, open(os.path.join(d, "hist_new.json"), "w"), separators=(",", ":"))
+    print("new results", len(res), "history rows", len(hist))
     if mode != "refresh":
         return
     for lg in ("nba", "nfl"):
