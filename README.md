@@ -26,6 +26,10 @@ The site is an installable web app (a home-screen icon, full screen, works offli
 
 When the app comes back to the front after 10 minutes or more, it reloads the latest data on its own.
 
+## College basketball (watch-only)
+
+The **College** tab runs men's Division I basketball through the same fair-price method with its own model, kept apart from the NBA and NFL so it can't shift their weights. Its ratings and line-move weights are learned from every Division I game's DraftKings opening and closing lines since last season. ESPN, Kalshi and Action Network use different college abbreviations, so games are matched by team name. College picks are logged and graded against the closing line in the College tab, never count in the record and are never the best bet. Today's and tomorrow's games are on the board.
+
 ## What runs when
 
 | Time (Pacific) | Job |
@@ -37,7 +41,7 @@ When the app comes back to the front after 10 minutes or more, it reloads the la
 
 Times shift an hour during daylight saving time, because GitHub schedules run on UTC. GitHub often starts scheduled jobs 10 to 40 minutes late. The last refresh before a game is its closing snapshot, so more refreshes near game time mean a truer closing price. Public repositories get unlimited Actions minutes.
 
-**Once, after setting up (or at the start of a season):** Actions, Update sheet, Run workflow, choose **backfill**. It loads every finished game this season (DraftKings opening and closing lines, final scores, ESPN's pregame chance) into `hist.json` and fits the model. It takes a few minutes.
+**Once, after setting up (or at the start of a season):** Actions, Update sheet, Run workflow, choose **backfill**. It loads every finished game this season (DraftKings opening and closing lines, final scores, ESPN's pregame chance) into `hist.json` and fits the model. It takes a few minutes, longer the first time because college basketball reaches back to the start of last season.
 
 ## Good to know
 
@@ -59,7 +63,9 @@ Times shift an hour during daylight saving time, because GitHub schedules run on
 | `calib.json` | One row per finished game and market: each source's pre-game chance and the result (the accuracy test) |
 | `hist.json` | Every finished game this season: DraftKings open and close, score, ESPN's pregame chance (training data) |
 | `snaps.json`, `moves.json` | The sheet's own pre-game snapshots and where each line then closed (training data for the move model) |
-| `model.json` | Market team ratings and the learned weights behind the fair price, refit nightly by `pipeline/learn.py` |
+| `model.json` | Market team ratings and the learned weights behind the fair price, refit nightly by `pipeline/learn.py` (college weights under `college`) |
+| `college.json` | The College tab: today's and tomorrow's college slates and the watch-only picks |
+| `college_calib.json`, `college_moves.json` | College accuracy rows and move-model rows, kept apart from the NBA/NFL ones |
 | `pipeline/run.py` | Runs one refresh or grade from start to finish |
 | `pipeline/fetch.py` | Pulls ESPN, Kalshi and Action Network |
 | `pipeline/merge.py`, `score.py`, `reads.py`, `grade.py`, `pack.py` | Combine, price and score, write reads, grade, save |

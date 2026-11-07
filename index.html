@@ -63,6 +63,9 @@ header { display: flex; flex-wrap: wrap; align-items: center; justify-content: s
 .views { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
 .views button { background: none; border: 0; border-radius: 7px; padding: 6px 12px; font-weight: 600; font-size: 14px; cursor: pointer; color: var(--muted); }
 .views button[aria-current="page"] { background: var(--panel-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+.views { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.views::-webkit-scrollbar { display: none; }
+.views button { white-space: nowrap; flex: none; }
 
 .toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px 16px; }
 .dates { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -236,6 +239,8 @@ td.acts button { border: 1px solid var(--line); background: var(--panel-2); bord
 .best-test { justify-self: start; border: 1px solid var(--gold); color: var(--gold); background: none; border-radius: 9px; padding: 6px 12px; font-weight: 600; cursor: pointer; font-size: 13.5px; }
 
 @media (max-width: 640px) {
+  .views { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
+  .views button { padding: 7px 4px; font-size: 13.5px; }
   .sim-top { grid-template-columns: 1fr; justify-items: start; }
   .ask-row button { padding: 0 12px; }
   .row-h { display: none; }
@@ -256,6 +261,7 @@ td.acts button { border: 1px solid var(--line); background: var(--panel-2); bord
     <div class="brand"><div class="mark" aria-hidden="true">SM</div><div><h1>Sharp Money Sheet</h1><small>NFL · NBA · paper trading until the record earns it</small></div></div>
     <nav class="views" aria-label="Views">
       <button type="button" id="v-slate" data-view="slate">Slate</button>
+      <button type="button" id="v-college" data-view="college">College</button>
       <button type="button" id="v-test" data-view="test">Test a bet</button>
       <button type="button" id="v-trades" data-view="trades">My trades</button>
       <button type="button" id="v-record" data-view="record">Record</button>
@@ -269,7 +275,7 @@ td.acts button { border: 1px solid var(--line); background: var(--panel-2); bord
 
 <script>
 const TZ = "America/Los_Angeles";
-const state = { view: "slate", date: null, filter: "all", data: null, error: null, q: "", result: null, props: null, propsErr: null, board: null, results: null, calib: null, calMkt: "all", recMethod: "all", model: null, savedMsg: null, tradeMsg: null, confirmDel: null, confirmClear: false };
+const state = { view: "slate", date: null, filter: "all", data: null, error: null, q: "", result: null, props: null, propsErr: null, board: null, results: null, calib: null, calMkt: "all", recMethod: "all", model: null, savedMsg: null, tradeMsg: null, confirmDel: null, confirmClear: false, college: null, cdate: null, cfilter: "all" };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pct = (x, d = 0) => x == null ? "—" : (x * 100).toFixed(d) + "%";
@@ -296,13 +302,14 @@ function setView(v) {
   if (v === "test" && !state.props) loadProps().then(() => { if (state.view === "test") render(); });
   if (v === "record" && !state.calib) loadCalib().then(() => { if (state.view === "record") render(); });
   if (v === "method" && !state.model) loadModel().then(() => { if (state.view === "method") render(); });
+  if (v === "college" && !state.college) loadCollege().then(() => { if (state.view === "college") render(); });
   render();
 }
 function render() {
   const main = $("#main");
   if (state.error) { main.innerHTML = `<div class="note">The latest data couldn't be loaded (${esc(state.error)}). Refresh the page in a minute.</div>`; return; }
   if (!state.data) { main.innerHTML = `<div class="note">Loading the latest slate…</div>`; return; }
-  main.innerHTML = state.view === "record" ? renderRecord() : state.view === "method" ? renderMethod() : state.view === "test" ? renderTest() : state.view === "trades" ? renderTrades() : renderSlate();
+  main.innerHTML = state.view === "record" ? renderRecord() : state.view === "method" ? renderMethod() : state.view === "test" ? renderTest() : state.view === "trades" ? renderTrades() : state.view === "college" ? renderCollege() : renderSlate();
 }
 
 /* ---------- slate ---------- */
@@ -487,6 +494,53 @@ function leanLabel(g, lean) {
   const sd = m.sides.find(x => x.key === lean.side); return sd ? sd.label + " · " + "●".repeat(lean.conf) + "○".repeat(3 - lean.conf) : "";
 }
 
+/* ---------- college basketball (watch-only) ---------- */
+async function loadCollege() {
+  try { const r = await fetch("college.json", { cache: "no-store" }); if (!r.ok) throw 0; state.college = await r.json(); }
+  catch (e) { state.college = { slates: {}, picks: {}, missing: true }; }
+}
+function renderCollege() {
+  const C = state.college;
+  if (!C) return `<div class="note">Loading college basketball…</div>`;
+  const picks = Object.values(C.picks || {}).sort((a, b) => (b.start || "").localeCompare(a.start || "") || (b.ev ?? 0) - (a.ev ?? 0));
+  const graded = picks.filter(p => p.result), S = stats(graded), pu = graded.filter(p => p.result === "P").length;
+  const head = `<div class="pass"><span class="eyebrow"><span class="tag">College basketball</span><span class="chip">Watch-only</span></span>
+    <p class="muted">Same fair-price method with its own model: team ratings and line-move weights learned from every Division I game's closing lines since last season. Picks are logged and graded against the closing line here, but they don't count in the record and are never the best bet. They go live only if they beat the close over a big sample.</p></div>
+    <div class="tiles">
+      <div class="tile"><span class="label">Logged</span><span class="v">${picks.length}</span><span class="d">${graded.length} graded</span></div>
+      <div class="tile"><span class="label">Avg CLV</span><span class="v">${S.clv == null ? "—" : signed(S.clv * 100, 1)}</span><span class="d">Points of probability vs the close</span></div>
+      <div class="tile"><span class="label">Beat close</span><span class="v">${S.beat == null ? "—" : pct(S.beat)}</span><span class="d">Share of graded picks</span></div>
+      <div class="tile"><span class="label">Record</span><span class="v">${graded.length ? `${S.w}-${S.l}${pu ? "-" + pu : ""}` : "—"}</span><span class="d">${graded.length ? signed(S.u, 2) + " units, 1 per pick" : "No results yet"}</span></div>
+    </div>`;
+  const dates = Object.keys(C.slates || {}).sort();
+  if (!dates.length) return `<div style="display:grid;gap:20px">${head}<div class="note">${C.missing ? "The college slate isn't published yet. It appears after the next hourly refresh." : "No college games in the window right now."}</div></div>`;
+  const t = todayPT(), now = Date.now();
+  let date = state.cdate && C.slates[state.cdate] ? state.cdate : null;
+  if (!date) { const ahead = dates.filter(d => d >= t); date = ahead.find(d => (C.slates[d].games || []).some(g => Date.parse(g.start) > now)) || ahead[0] || dates[dates.length - 1]; }
+  state.cdate = date;
+  const s = C.slates[date], games = s.games || [];
+  const edge = g => (g.markets || []).some(m => m.sides.some(x => (x.ev ?? -1) >= EV_PICK));
+  const shown = state.cfilter === "picks" ? games.filter(edge) : games, log = picks.slice(0, 60);
+  return `<div style="display:grid;gap:20px">${head}
+    <div class="toolbar"><div class="dates" role="group" aria-label="Choose college slate">${dates.map(d => `<button type="button" data-cdate="${d}" aria-pressed="${d === date}">${dayFmt(d, { weekday: "short", month: "short", day: "numeric" })}<small>${(C.slates[d].games || []).length} games</small></button>`).join("")}</div></div>
+    <div class="fresh"><span>Updated <b>${esc(stampFmt(s.updatedAt))}</b></span><span>Lines: DraftKings</span><span>Prices: Kalshi</span><span>Bets %: ${games.some(g => g.hasTickets) ? "Action Network" : "<b>not posted yet</b>"}</span></div>
+    <section style="display:grid;gap:12px" aria-label="College games">
+      <div class="section-head"><h2>The board</h2>
+        <div class="filters" role="group" aria-label="Filter college games">${[["all", `All ${games.length}`], ["picks", `Edge 1.5%+ · ${games.filter(edge).length}`]].map(([k, l]) => `<button type="button" data-cfilter="${k}" aria-pressed="${state.cfilter === k}">${l}</button>`).join("")}</div></div>
+      <div class="games">${shown.length ? shown.map(g => renderGame(g, s)).join("") : `<div class="note">No college side has a 1.5% edge on this slate.</div>`}</div>
+    </section>
+    <div class="card"><h3>Watch-only pick log</h3>
+      ${log.length ? `<div class="tbl-wrap"><table class="log"><thead><tr><th>Day</th><th>Pick</th><th>Game</th><th class="n">Edge</th><th>Taken</th><th class="n">CLV</th><th>Result</th></tr></thead><tbody>
+      ${log.map(p => `<tr><td>${dayFmt(p.date, { month: "short", day: "numeric" })}</td><td>${esc(p.label)}</td><td>${esc(p.matchup)}</td><td class="n">${p.ev != null ? signed(p.ev * 100, 1) + "%" : "—"}</td><td class="mono">${esc(venueTxt(p.price))}</td><td class="n">${p.clvProb == null ? "—" : signed(p.clvProb * 100, 1)}</td><td class="${p.result ? "res-" + p.result : "muted"}">${p.result ? ({ W: "Win", L: "Loss", P: "Push" })[p.result] + (p.finalScore ? ` <span class="muted">${esc(p.finalScore)}</span>` : "") : "Pending"}</td></tr>`).join("")}</tbody></table></div>${picks.length > log.length ? `<p class="fine">Newest ${log.length} of ${picks.length}.</p>` : ""}` : `<p class="muted">No college picks yet. Every side whose best price beats its fair price by 1.5% or more is logged here.</p>`}
+    </div></div>`;
+}
+function renderCollegeMethod() {
+  const M = state.model || {}, c = (M.college || {}).NCAAB, mc = c && c.move && c.move.check, rt = (M.ratings || {}).NCAAB;
+  return `<h3 style="font-size:20px">College basketball (watch-only)</h3>
+    <p>College games run through the same method with their own model, kept apart so they can't shift the NBA and NFL weights mid-test. Ratings are fit to every Division I game's closing lines since last season (half-life 45 days, about 360 teams), and sources are matched by team name because ESPN, Kalshi and Action Network use different college abbreviations. College picks are graded against the closing line in the College tab and stay out of the record until they prove themselves.</p>
+    ${mc ? `<p class="fine">College line-move test${mc.skillVsZero > 0 ? "" : " (switched off)"}: on the newest ${mc.test} cases the predicted moves cut the error by ${signed(mc.skillVsZero * 100, 1)}% against assuming no move${mc.direction ? `, right direction ${pct(mc.direction.hit)} of the time` : ""}.${rt ? ` Ratings from ${rt.n.toLocaleString()} games.` : ""}</p>` : ""}`;
+}
+
 /* ---------- record ---------- */
 function stats(list) {
   const w = list.filter(p => p.result === "W").length, l = list.filter(p => p.result === "L").length;
@@ -658,6 +712,7 @@ function renderMethod() {
     <h3 style="font-size:20px">Market ratings</h3>
     <p>Every NBA and NFL game this season, with DraftKings' opening and closing lines and the final score, is loaded from ESPN. Team ratings are fit to the closing spreads and totals, with recent games counting more (half-life 30 days in the NBA, 8 weeks in the NFL). They're the market's own season-long view of each team, so a line far from them usually means injury news or an overreaction. The model learns which. They replace the old points-for-and-against rating, which stays on the board for reference.</p>
     ${renderLearned()}
+    ${renderCollegeMethod()}
     <h3 style="font-size:20px">The old signal score</h3>
     <p>Before November 7 every side got a score out of 100 from hand-set weights: 70% market signals, 30% situation. Picks needed 50, and the best bet needed 60 with two signals. Those weights were never tested, so the score no longer picks anything. It's kept in the record so the two methods can be compared on the same days.</p>
     <div class="weights">
@@ -1566,6 +1621,8 @@ $("#main").addEventListener("click", e => {
     render(); return;
   }
   const d = e.target.closest("button[data-date]"); if (d) { state.date = d.dataset.date; render(); return; }
+  const cd = e.target.closest("button[data-cdate]"); if (cd) { state.cdate = cd.dataset.cdate; render(); return; }
+  const cf2 = e.target.closest("button[data-cfilter]"); if (cf2) { state.cfilter = cf2.dataset.cfilter; render(); return; }
   const f = e.target.closest("button[data-filter]"); if (f) { state.filter = f.dataset.filter; render(); return; }
   const cf = e.target.closest("button[data-cal]"); if (cf) { state.calMkt = cf.dataset.cal; render(); return; }
   const rm = e.target.closest("button[data-recm]"); if (rm) { state.recMethod = rm.dataset.recm; render(); }
@@ -1582,7 +1639,7 @@ $("#main").addEventListener("submit", e => {
   }
 });
 $("#main").addEventListener("change", e => { if (e.target.matches("input[data-act=import]") && e.target.files[0]) importTrades(e.target.files[0]); });
-window.addEventListener("hashchange", () => { const v = location.hash.slice(1).split("?")[0]; if (["slate", "test", "trades", "record", "method"].includes(v) && v !== state.view) { if (v === "trades") state.results = null; setView(v); } });
+window.addEventListener("hashchange", () => { const v = location.hash.slice(1).split("?")[0]; if (["slate", "college", "test", "trades", "record", "method"].includes(v) && v !== state.view) { if (v === "trades") state.results = null; setView(v); } });
 /* ---------- install as an app ---------- */
 const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -1618,7 +1675,8 @@ document.addEventListener("visibilitychange", async () => {
   const before = state.data && state.data.updatedAt;
   await loadData();
   if (state.data && state.data.updatedAt !== before) {
-    state.props = null; state.propsP = null; state.board = null; state.results = null; state.calib = null; state.model = null;
+    state.props = null; state.propsP = null; state.board = null; state.results = null; state.calib = null; state.model = null; state.college = null;
+    if (state.view === "college") loadCollege().then(() => { if (state.view === "college") render(); });
     if (state.view === "test") loadProps().then(() => { if (state.view === "test") render(); });
     if (state.view === "record") loadCalib().then(() => { if (state.view === "record") render(); });
     if (state.view === "method") loadModel().then(() => { if (state.view === "method") render(); });
@@ -1627,7 +1685,7 @@ document.addEventListener("visibilitychange", async () => {
 });
 (async function start() {
   const v = location.hash.slice(1).split("?")[0], hq = new URLSearchParams(location.hash.split("?")[1] || "").get("q");
-  setView(["slate", "test", "trades", "record", "method"].includes(v) ? v : "slate");
+  setView(["slate", "college", "test", "trades", "record", "method"].includes(v) ? v : "slate");
   await loadData();
   render();
   showInstall();
