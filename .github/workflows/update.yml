@@ -29,7 +29,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -50,5 +50,5 @@ jobs:
           git add data.json
           if [ -f props.json ]; then git add props.json; fi
           if [ -f results.json ]; then git add results.json; fi
-          for f in calib.json hist.json snaps.json moves.json model.json; do if [ -f "$f" ]; then git add "$f"; fi; done
+          for f in calib.json hist.json snaps.json moves.json model.json college.json college_calib.json college_moves.json; do if [ -f "$f" ]; then git add "$f"; fi; done
           if git diff --cached --quiet; then echo "No changes"; else git commit -m "Update data" && (git push || (git pull --rebase -X theirs && git push)); fi
