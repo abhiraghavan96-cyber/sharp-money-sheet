@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "refresh (pull and score) or grade (score finished games)"
+        description: "refresh (pull and score), grade (score finished games, refit the model) or backfill (load this season's history)"
         type: choice
-        options: [refresh, grade]
+        options: [refresh, grade, backfill]
         default: refresh
 
 permissions:
@@ -50,5 +50,5 @@ jobs:
           git add data.json
           if [ -f props.json ]; then git add props.json; fi
           if [ -f results.json ]; then git add results.json; fi
-          if [ -f calib.json ]; then git add calib.json; fi
+          for f in calib.json hist.json snaps.json moves.json model.json; do if [ -f "$f" ]; then git add "$f"; fi; done
           if git diff --cached --quiet; then echo "No changes"; else git commit -m "Update data" && (git push || (git pull --rebase -X theirs && git push)); fi
