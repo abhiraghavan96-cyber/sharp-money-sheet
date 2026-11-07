@@ -1,6 +1,6 @@
 # Sharp Money Sheet
 
-A daily NFL and NBA betting sheet: DraftKings lines, Kalshi prices, public share of bets, rest, injuries and ESPN's model, scored into one best bet a day, with a paper-trading record graded against the closing line.
+A daily NFL and NBA betting sheet. It prices every spread and total from the sportsbooks' consensus, adds the line move it expects (learned nightly from this season's games) and bets only where the best available price beats that fair price. Paper trading, graded against the closing line.
 
 It runs on its own. GitHub Actions pulls fresh data every hour through the day, scores it, grades finished games and saves `data.json`. GitHub Pages serves the site. No Claude account, no sign-in and no computer left on.
 
@@ -23,9 +23,11 @@ Share the link from step 5 with your friends. That's it.
 | :13 past every hour, 7 AM to 8 PM | Refresh: lines, Kalshi prices, bets, injuries, rest, ESPN model, scores, reads, limit-order fills |
 | also :43, 2 PM to 8 PM daily | Extra refreshes before NBA tip-offs |
 | also :43, 8 AM to 1 PM Sundays | Extra refreshes before the NFL afternoon games |
-| 11:47 PM | Grade finished games: result, closing price, CLV, limit orders, and the model-vs-market accuracy rows |
+| 11:47 PM | Grade finished games: result, closing price, CLV, limit orders, accuracy rows; then refit the model (`model.json`) |
 
 Times shift an hour during daylight saving time, because GitHub schedules run on UTC. GitHub often starts scheduled jobs 10 to 40 minutes late. The last refresh before a game is its closing snapshot, so more refreshes near game time mean a truer closing price. Public repositories get unlimited Actions minutes.
+
+**Once, after setting up (or at the start of a season):** Actions, Update sheet, Run workflow, choose **backfill**. It loads every finished game this season (DraftKings opening and closing lines, final scores, ESPN's pregame chance) into `hist.json` and fits the model. It takes a few minutes.
 
 ## Good to know
 
@@ -44,7 +46,11 @@ Times shift an hour during daylight saving time, because GitHub schedules run on
 | `props.json` | Players, Kalshi prop ladders, team ratings for Test a bet, and closing prop prices for CLV |
 | `results.json` | Final scores and box scores from the last 14 days, for grading My trades |
 | `calib.json` | One row per finished game and market: each source's pre-game chance and the result (the accuracy test) |
+| `hist.json` | Every finished game this season: DraftKings open and close, score, ESPN's pregame chance (training data) |
+| `snaps.json`, `moves.json` | The sheet's own pre-game snapshots and where each line then closed (training data for the move model) |
+| `model.json` | Market team ratings and the learned weights behind the fair price, refit nightly by `pipeline/learn.py` |
 | `pipeline/run.py` | Runs one refresh or grade from start to finish |
 | `pipeline/fetch.py` | Pulls ESPN, Kalshi and Action Network |
-| `pipeline/merge.py`, `score.py`, `reads.py`, `grade.py`, `pack.py` | Combine, score, write reads, grade, save |
+| `pipeline/merge.py`, `score.py`, `reads.py`, `grade.py`, `pack.py` | Combine, price and score, write reads, grade, save |
+| `pipeline/learn.py` | Fits market ratings and the fair-price weights from the season so far |
 | `.github/workflows/update.yml` | The schedule |
