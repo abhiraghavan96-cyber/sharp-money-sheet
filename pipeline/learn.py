@@ -22,7 +22,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from score import (nv, at_line, clamp, _nd, SD_MARGIN, SD_TOTAL, MOVE_FEATS, MOVE_PRIOR, RESULT_FEATS, RESULT_PRIOR,  # noqa: E402
                    MOVE_N0, RESULT_N0, TAU_HOURS)
 
-HALF_LIFE = {"NBA": 30.0, "NFL": 56.0}   # days; older closing lines count half as much
+HALF_LIFE = {"NBA": 30.0, "NFL": 56.0, "NCAAB": 45.0}   # days; older closing lines count half as much
+PRO = ("NBA", "NFL")                      # the main sheet's leagues: one shared move model and one result model
+COLLEGE = ("NCAAB",)                      # watch-only: fitted separately into model.json "college", never mixed into PRO
 RATING_RIDGE = 2.0                        # each team's rating starts as if it had two average games
 MIN_GAMES = 4                             # a team needs this many games before its rating is used
 INTERCEPT_STRENGTH = 5.0                  # a blanket home or over bias needs five times the evidence of a real input
@@ -100,6 +102,91 @@ def fit_ratings(games, lg, asof):
     return out if out["team"] else None
 
 
+class SparseRatings:
+    """fit_ratings for leagues with hundreds of teams (college). Same model and output, solved incrementally:
+    asked for dates in increasing order, it keeps the normal equations, decays them forward (every weight halves each
+    half-life, so the whole sum scales by one factor), adds the new games, and runs Gauss-Seidel from the last answer."""
+    C = "~hca"   # the intercept (home edge for spreads, league total for totals)
+
+    def __init__(self, games, lg):
+        self.lg = lg
+        self.gs = sorted((g for g in games if g["lg"] == lg), key=lambda g: g["date"])
+        self.i, self.cur, self.count = 0, None, {}
+        self.A = {"sp": {}, "tot": {}}
+        self.b = {"sp": {}, "tot": {}}
+        self.m = {"sp": 0, "tot": 0}
+        self.beta = {"sp": {}, "tot": {}}
+        self.cache = {}
+
+    def _add(self, kind, xs, y, w):
+        A, b = self.A[kind], self.b[kind]
+        for i, xi in xs:
+            if not xi:
+                continue
+            b[i] = b.get(i, 0.0) + w * xi * y
+            row = A.setdefault(i, {})
+            for j, xj in xs:
+                if xj:
+                    row[j] = row.get(j, 0.0) + w * xi * xj
+
+    def _solve(self, kind):
+        A, b, beta = self.A[kind], self.b[kind], self.beta[kind]
+        for _ in range(2000):
+            delta = 0.0
+            for i, row in A.items():
+                diag = row.get(i, 0.0) + (1e-6 if i == self.C else RATING_RIDGE)
+                new = (b.get(i, 0.0) - sum(v * beta.get(j, 0.0) for j, v in row.items() if j != i)) / diag
+                delta = max(delta, abs(new - beta.get(i, 0.0)))
+                beta[i] = new
+            if delta < 1e-4:
+                break
+        return beta
+
+    def at(self, asof):
+        if asof in self.cache:
+            return self.cache[asof]
+        if self.cur is not None and asof < self.cur:
+            raise ValueError("SparseRatings: dates must not go backwards")
+        if self.cur is not None and asof > self.cur:
+            f = 0.5 ** (days_between(self.cur, asof) / HALF_LIFE[self.lg])
+            for kind in ("sp", "tot"):
+                for row in self.A[kind].values():
+                    for j in row:
+                        row[j] *= f
+                for i in self.b[kind]:
+                    self.b[kind][i] *= f
+        self.cur = asof
+        while self.i < len(self.gs) and self.gs[self.i]["date"] < asof:
+            g = self.gs[self.i]
+            self.i += 1
+            w = 0.5 ** (days_between(g["date"], asof) / HALF_LIFE[self.lg])
+            for t in (g["home"], g["away"]):
+                self.count[t] = self.count.get(t, 0) + 1
+            if g.get("sp"):
+                self._add("sp", [(self.C, 0.0 if g.get("neutral") else 1.0), (g["home"], 1.0), (g["away"], -1.0)], -g["sp"][1], w)
+                self.m["sp"] += 1
+            if g.get("tot"):
+                self._add("tot", [(self.C, 1.0), (g["home"], 1.0), (g["away"], 1.0)], g["tot"][1], w)
+                self.m["tot"] += 1
+        teams = sorted(self.count)
+        out = None
+        if self.i >= 10 and len(teams) >= 4:
+            out = {"hca": 0.0, "team": {}, "T": 0.0, "tot": {}, "n": self.i, "minGames": MIN_GAMES, "asof": asof}
+            for kind in ("sp", "tot"):
+                if self.m[kind] < 10:
+                    continue
+                beta = self._solve(kind)
+                if kind == "sp":
+                    out["hca"] = round(beta.get(self.C, 0.0), 2)
+                    out["team"] = {t: [round(beta.get(t, 0.0), 2), self.count[t]] for t in teams}
+                else:
+                    out["T"] = round(beta.get(self.C, 0.0), 2)
+                    out["tot"] = {t: [round(beta.get(t, 0.0), 2), self.count[t]] for t in teams}
+            out = out if out["team"] else None
+        self.cache[asof] = out
+        return out
+
+
 def rating_pred(rt, g):
     th, ta = rt["team"].get(g["home"]), rt["team"].get(g["away"])
     if not th or not ta or min(th[1], ta[1]) < MIN_GAMES:
@@ -114,12 +201,16 @@ def hist_rows(hist):
     using only ratings fit on games before each game's date."""
     N = _nd()
     games = sorted(hist.values(), key=lambda g: (g["date"], g.get("start", "")))
-    cache, moves, results, rat_err = {}, [], [], {"NBA": [], "NFL": []}
+    cache, moves, results, rat_err = {}, [], [], {lg: [] for lg in PRO + COLLEGE}
+    trackers = {}
     for g in games:
         lg = g["lg"]
         key = (lg, g["date"])
         if key not in cache:
-            cache[key] = fit_ratings(games, lg, g["date"])
+            if lg in COLLEGE:
+                cache[key] = trackers.setdefault(lg, SparseRatings(games, lg)).at(g["date"])
+            else:
+                cache[key] = fit_ratings(games, lg, g["date"])
         rt = cache[key]
         rp = rating_pred(rt, g) if rt else None
         res_margin, res_total = g["hs"] - g["as"], g["hs"] + g["as"]
@@ -283,8 +374,10 @@ def main():
     games = list(hist.values())
     ratings, rating_check = {}, {}
     hmv, hrs, rat_err = hist_rows(hist)
-    for lg in ("NBA", "NFL"):
-        rt = fit_ratings(games, lg, tomorrow)
+    for lg in PRO + COLLEGE:
+        if not any(g["lg"] == lg for g in games):
+            continue
+        rt = SparseRatings(games, lg).at(tomorrow) if lg in COLLEGE else fit_ratings(games, lg, tomorrow)
         if rt:
             ratings[lg] = rt
         e = rat_err[lg]
@@ -302,11 +395,21 @@ def main():
             "assumedMarginSD": SD_MARGIN[lg], "assumedTotalSD": SD_TOTAL[lg],
         }
     lmv, lrs = live_rows(calib, moves_live)
-    move = fit(hmv + lmv, MOVE_FEATS, MOVE_PRIOR, MOVE_N0, True)
-    result = fit(hrs + lrs, RESULT_FEATS, RESULT_PRIOR, RESULT_N0, False)
+    move = fit([r for r in hmv + lmv if r["lg"] in PRO], MOVE_FEATS, MOVE_PRIOR, MOVE_N0, True)
+    result = fit([r for r in hrs + lrs if r["lg"] in PRO], RESULT_FEATS, RESULT_PRIOR, RESULT_N0, False)
+    # college: its own move and result models from its own history and its own tracked games
+    cmv, crs = live_rows(load(os.path.join(root, "college_calib.json"), {}) or {}, load(os.path.join(root, "college_moves.json"), {}) or {})
+    college = {}
+    for lg in COLLEGE:
+        if not any(g["lg"] == lg for g in games):
+            continue
+        cm = fit([r for r in hmv + cmv if r["lg"] == lg], MOVE_FEATS, MOVE_PRIOR, MOVE_N0, True)
+        cr = fit([r for r in hrs + crs if r["lg"] == lg], RESULT_FEATS, RESULT_PRIOR, RESULT_N0, False)
+        college[lg] = {"move": dict(cm, prior=MOVE_PRIOR, n0=MOVE_N0), "result": dict(cr, prior=RESULT_PRIOR, n0=RESULT_N0)}
     model = {"version": 3, "fittedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "asof": today,
              "ratings": ratings, "ratingCheck": rating_check,
-             "move": dict(move, prior=MOVE_PRIOR, n0=MOVE_N0), "result": dict(result, prior=RESULT_PRIOR, n0=RESULT_N0)}
+             "move": dict(move, prior=MOVE_PRIOR, n0=MOVE_N0), "result": dict(result, prior=RESULT_PRIOR, n0=RESULT_N0),
+             "college": college}
     with open(os.path.join(root, "model.json"), "w") as f:
         json.dump(model, f, separators=(",", ":"))
     print("model.json: ratings", {k: v["n"] for k, v in ratings.items()}, "| move rows", move["n"], move["bySource"], "| result rows", result["n"], result["bySource"])
@@ -315,6 +418,9 @@ def main():
     print("result coef", result["coef"])
     print("result check", result["check"])
     print("rating check", rating_check)
+    for lg, c in college.items():
+        print("college", lg, "| move rows", c["move"]["n"], c["move"]["bySource"], "coef", c["move"]["coef"], "check", c["move"]["check"])
+        print("college", lg, "| result rows", c["result"]["n"], c["result"]["bySource"], "coef", c["result"]["coef"], "check", c["result"]["check"])
 
 
 if __name__ == "__main__":

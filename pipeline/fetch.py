@@ -9,7 +9,7 @@ Every source is optional: a source that fails is logged and skipped, and the pag
 """
 import json, os, re, sys, time, unicodedata, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -17,7 +17,12 @@ from merge import cands  # noqa: E402  (Kalshi team-code aliases)
 
 UA = "SharpMoneySheet/1.0 (personal research project)"
 PT = ZoneInfo("America/Los_Angeles")
-SPORT = {"nba": "basketball", "nfl": "football"}
+SPORT = {"nba": "basketball", "nfl": "football", "ncaab": "basketball"}
+# ESPN's path for each league (college basketball lives under mens-college-basketball, and its scoreboard
+# only lists every Division I game when asked for group 50 with a high limit)
+ESPN_PATH = {"nba": "basketball/nba", "nfl": "football/nfl", "ncaab": "basketball/mens-college-basketball"}
+ESPN_SB_EXTRA = {"ncaab": "&groups=50&limit=400"}
+COLLEGE = ("ncaab",)   # watch-only leagues: their own model, their own file (college.json), never on the main record
 KALSHI = "https://api.elections.kalshi.com/trade-api/v2/markets?series_ticker={s}&status=open&limit=1000"
 MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
 
@@ -70,7 +75,7 @@ def espn(dates, leagues=("nba", "nfl")):
     for lg in leagues:
         for d in dates:
             try:
-                j = get(f"https://site.api.espn.com/apis/site/v2/sports/{SPORT[lg]}/{lg}/scoreboard?dates={d}")
+                j = get(f"https://site.api.espn.com/apis/site/v2/sports/{ESPN_PATH[lg]}/scoreboard?dates={d}{ESPN_SB_EXTRA.get(lg, '')}")
             except Exception as e:  # noqa: BLE001
                 print("espn scoreboard failed", lg, d, e)
                 continue
@@ -91,6 +96,9 @@ def espn(dates, leagues=("nba", "nfl")):
                      "awayScore": float(a.get("score") or 0), "homeScore": float(h.get("score") or 0),
                      "indoor": v.get("indoor"), "city": ad.get("city"), "state": ad.get("state"), "country": ad.get("country"),
                      "stype": (e.get("season") or {}).get("type"), "neutral": bool(c.get("neutralSite"))}
+                if lg in COLLEGE:   # names for matching other sources, whose college abbreviations often differ from ESPN's
+                    for s, t in (("away", a["team"]), ("home", h["team"])):
+                        g[s + "Names"] = [x for x in (t.get("location"), t.get("shortDisplayName"), t.get("displayName"), t.get("name") and t.get("location") and t["location"] + " " + t["name"]) if x]
                 q = oc
                 ps, t = o.get("pointSpread") or {}, o.get("total") or {}
                 if q(ps.get("home")) and q(ps.get("away")):
@@ -104,7 +112,7 @@ def espn(dates, leagues=("nba", "nfl")):
 def context(games):
     out = {}
     for g in games:
-        if g["status"] != "STATUS_SCHEDULED":
+        if g["status"] != "STATUS_SCHEDULED" or g["league"].lower() in COLLEGE:
             continue
         lg = g["league"].lower()
         try:
@@ -147,6 +155,42 @@ def context(games):
             pass
         out[g["id"]] = {"pred": pred, "home": teams.get("home"), "away": teams.get("away")}
     return out
+
+
+def college_context(games, hours=40):
+    """ESPN's predictor, records, recent games and listed injuries for college games starting in the next `hours`
+    (one summary per game, fetched in parallel; college injury lists are thin, so no lost-production estimate)."""
+    soon = (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    todo = [g for g in games if g["league"].lower() in COLLEGE and g["status"] == "STATUS_SCHEDULED" and g["start"] <= soon]
+
+    def one(g):
+        try:
+            s = summary(g["league"].lower(), g["id"])
+        except Exception as e:  # noqa: BLE001
+            print("espn summary failed", g["id"], e)
+            return g["id"], None
+        teams = {}
+        for c in s["header"]["competitions"][0]["competitors"]:
+            ab = c["team"]["abbreviation"]
+            inj = next((t for t in s.get("injuries", []) if (t.get("team") or {}).get("abbreviation") == ab), {"injuries": []})
+            st = lambda i: (i.get("status") or "").lower()
+            out_ = [i["athlete"]["displayName"] for i in inj.get("injuries", []) if st(i) in ("out", "doubtful")]
+            qq = [i["athlete"]["displayName"] for i in inj.get("injuries", []) if st(i) == "questionable"]
+            l5 = next((t for t in s.get("lastFiveGames", []) if (t.get("team") or {}).get("abbreviation") == ab), {"events": []})
+            dates = sorted(e["gameDate"] for e in l5.get("events", []) if e.get("gameDate"))
+            rec = next((r.get("summary") for r in c.get("record", []) if r.get("type") == "total"), None)
+            teams[c["homeAway"]] = {"ab": ab, "rec": rec, "last": dates[-1] if dates else None, "recent": dates,
+                                    "out": out_[:6], "q": qq[:4], "lead": [], "coreOut": [], "coreQ": []}
+        p = s.get("predictor") or {}
+        pred = None
+        try:
+            pred = {"home": float(p["homeTeam"]["gameProjection"]), "away": float(p["awayTeam"]["gameProjection"])}
+        except (KeyError, TypeError, ValueError):
+            pass
+        return g["id"], {"pred": pred, "home": teams.get("home"), "away": teams.get("away")}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        res = dict(ex.map(one, todo))
+    return {k: v for k, v in res.items() if v}
 
 
 # ---------- player game logs ----------
@@ -512,7 +556,49 @@ def kalshi(series, codes):
     return {"n": len(j.get("markets", [])), "o": o}
 
 
+def kalshi_college(series, codes):
+    """College game markets (many more games, so every page is read). Keyed by the full event code (date + teams,
+    e.g. 26NOV07MORELOU) because Kalshi's college team codes often differ from ESPN's; the event title and each
+    spread market's team name come along so merge.py can match games by name.
+    Spreads: {"o": {event: {code: [[strike, bid, ask], ...]}}, "t": {event: title}, "names": {event: {code: team name}}}.
+    Totals: {"o": {event: [[strike, bid, ask], ...]}, "t": {event: title}}."""
+    try:
+        ms = kalshi_markets(series)
+    except Exception as e:  # noqa: BLE001
+        print("kalshi failed", series, e)
+        return {"n": 0, "o": {}, "t": {}, "names": {}}
+    o, t, names = {}, {}, {}
+    for m in ms:
+        ev = m.get("event_ticker", "")
+        parts = ev.split("-")
+        if len(parts) < 2 or not any(parts[1].startswith(c) for c in codes):
+            continue
+        key = parts[1]
+        t.setdefault(key, m.get("title") or "")
+        try:
+            b, a = float(m["yes_bid_dollars"]), float(m["yes_ask_dollars"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not 0.25 <= (a + b) / 2 <= 0.75:
+            continue
+        if "TOTAL" in series:
+            o.setdefault(key, []).append([m.get("floor_strike"), b, a])
+        else:
+            team = re.sub(r"[0-9]+$", "", m["ticker"].split("-")[-1])
+            o.setdefault(key, {}).setdefault(team, []).append([m.get("floor_strike"), b, a])
+            nm = re.split(r"\s+wins\b", m.get("yes_sub_title") or "", flags=re.I)[0].strip()
+            if nm:
+                names.setdefault(key, {}).setdefault(team, nm)
+    return {"n": len(ms), "o": o, "t": t, "names": names}
+
+
 AN_API = "https://api.actionnetwork.com/web/v2/scoreboard/publicbetting/{lg}?bookIds=15&date={d}&periods=event"
+AN_EXTRA = {"ncaab": "&division=D1"}   # Action Network only lists every Division I game when asked
+
+
+def an_names(g, tid):
+    t = next((x for x in g.get("teams", []) if x.get("id") == tid), {}) or {}
+    return [x for x in (t.get("location"), t.get("display_name"), t.get("short_name"), t.get("full_name")) if x]
 
 
 def tickets(lg, dates):
@@ -521,7 +607,7 @@ def tickets(lg, dates):
     games, seen = [], set()
     for day in dates:
         try:
-            j = get(AN_API.format(lg=lg, d=day))
+            j = get(AN_API.format(lg=lg, d=day) + AN_EXTRA.get(lg, ""))
             for g in j.get("games") or []:
                 if g.get("id") not in seen:
                     seen.add(g.get("id"))
@@ -572,6 +658,7 @@ def parse_tickets(games):
             x = next((y for y in (arr or []) if y.get("side") == side and ((y.get("bet_info") or {}).get("tickets") or {}).get("percent")), None)
             return x["bet_info"]["tickets"]["percent"] if x else None
         out.append({"away": ab(g.get("away_team_id")), "home": ab(g.get("home_team_id")), "start": g.get("start_time"),
+                    "awayNames": an_names(g, g.get("away_team_id")), "homeNames": an_names(g, g.get("home_team_id")),
                     "bets": g.get("num_bets"), "home_t": tk(e.get("spread"), "home"), "away_t": tk(e.get("spread"), "away"),
                     "over_t": tk(e.get("total"), "over"), "under_t": tk(e.get("total"), "under")})
     return out
@@ -587,7 +674,7 @@ def book_odds(lg, dates):
     out, seen = [], set()
     for day in dates:
         try:
-            j = get(AN_ODDS.format(lg=lg, books=",".join(map(str, BOOKS)), d=day))
+            j = get(AN_ODDS.format(lg=lg, books=",".join(map(str, BOOKS)), d=day) + AN_EXTRA.get(lg, ""))
         except Exception as e:  # noqa: BLE001
             print("action network odds failed", lg, day, e)
             continue
@@ -621,13 +708,14 @@ def book_odds(lg, dates):
                 if b:
                     books[name] = b
             if books:
-                out.append({"away": ab(g.get("away_team_id")), "home": ab(g.get("home_team_id")), "start": g.get("start_time"), "books": books})
+                out.append({"away": ab(g.get("away_team_id")), "home": ab(g.get("home_team_id")), "start": g.get("start_time"), "books": books,
+                            "awayNames": an_names(g, g.get("away_team_id")), "homeNames": an_names(g, g.get("home_team_id"))})
     return out
 
 
 # ---------- results for grading paper trades (final scores and box scores) ----------
 def summary(lg, gid):
-    return get(f"https://site.api.espn.com/apis/site/v2/sports/{SPORT[lg]}/{lg}/summary?event={gid}", tries=2)
+    return get(f"https://site.api.espn.com/apis/site/v2/sports/{ESPN_PATH[lg]}/summary?event={gid}", tries=2)
 
 
 def hist_row(g, s):
@@ -702,6 +790,8 @@ def results(games):
     out, hist = {}, {}
     for g in games:
         st = g.get("status")
+        if g["league"].lower() in COLLEGE:   # college: history rows only (college_hist), no box scores in results.json
+            continue
         if st not in ("STATUS_FINAL", "STATUS_POSTPONED", "STATUS_CANCELED") or (g["id"] in known and known[g["id"]].get("status") == st):
             continue
         r = {"lg": g["league"], "date": g["date"], "start": g["start"], "status": st, "away": g["away"], "home": g["home"]}
@@ -721,20 +811,45 @@ def results(games):
     return out, hist
 
 
-SEASON_START = {"nba": "2026-10-20", "nfl": "2026-09-09"}
+def college_hist(games, known=None):
+    """History rows (DraftKings open/close, score, ESPN's pregame chance) for finished college games not yet in
+    hist.json, one summary each, fetched in parallel."""
+    known = known if known is not None else known_ids("hist.json")
+    todo = [g for g in games if g["league"].lower() in COLLEGE and g.get("status") == "STATUS_FINAL"
+            and g.get("stype") in (2, 3) and g["id"] not in known]
+
+    def one(g):
+        try:
+            return g["id"], hist_row(g, summary(g["league"].lower(), g["id"]))
+        except Exception as e:  # noqa: BLE001
+            print("espn summary failed", g["id"], e)
+            return g["id"], None
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        res = dict(ex.map(one, todo))
+    return {k: v for k, v in res.items() if v}
+
+
+# college basketball reaches back a season: thousands of games give the college move model real data from day one
+SEASON_START = {"nba": "2026-10-20", "nfl": "2026-09-09", "ncaab": "2025-11-03"}
 
 
 def backfill(d):
-    """Every finished regular-season game since the season started that hist.json doesn't have yet."""
+    """Every finished regular-season and postseason game since the season started that hist.json doesn't have yet."""
     known, hist = known_ids("hist.json"), {}
     end = datetime.now(PT).date() - timedelta(days=1)
     for lg, first in SEASON_START.items():
         day, dates = datetime.strptime(first, "%Y-%m-%d").date(), []
         while day <= end:
-            dates.append(day.strftime("%Y%m%d"))
+            if lg not in COLLEGE or day.month not in (5, 6, 7, 8, 9, 10):   # no college games in the off-season
+                dates.append(day.strftime("%Y%m%d"))
             day += timedelta(days=1)
         games = [g for g in espn(dates, (lg,)) if g["status"] == "STATUS_FINAL" and g.get("stype") in (2, 3) and g["id"] not in known]
         print("backfill", lg, len(dates), "days,", len(games), "finished games to fetch")
+        if lg in COLLEGE:
+            got = college_hist(games, known)
+            hist.update(got)
+            print("backfill", lg, "history rows", len(got))
+            continue
         for g in games:
             try:
                 h = hist_row(g, summary(lg, g["id"]))
@@ -758,14 +873,37 @@ def main():
     # refresh looks three days ahead so Sunday's NFL games are on the board (and testable) from Friday
     days = [today - timedelta(days=1), today] if mode == "grade" else [today + timedelta(days=i) for i in range(3)]
     games = espn([x.strftime("%Y%m%d") for x in days])
+    # college: today and tomorrow only on refresh (dozens to 150+ games a day)
+    cdays = days if mode == "grade" else days[:2]
+    cgames = espn([x.strftime("%Y%m%d") for x in cdays], COLLEGE)
+    print("espn games", len(games), "| college", len(cgames))
+    games += cgames
     json.dump(games, open(os.path.join(d, "espn.json"), "w"))
-    print("espn games", len(games))
     res, hist = results(games)
+    chist = college_hist(games)
+    hist.update(chist)
     json.dump(res, open(os.path.join(d, "results_new.json"), "w"), separators=(",", ":"))
     json.dump(hist, open(os.path.join(d, "hist_new.json"), "w"), separators=(",", ":"))
-    print("new results", len(res), "history rows", len(hist))
+    print("new results", len(res), "history rows", len(hist), "(college", len(chist), ")")
     if mode != "refresh":
         return
+    ccodes = [f"{x.strftime('%y')}{MONTHS[x.month - 1]}{x.strftime('%d')}" for x in cdays]
+    try:
+        for lg in COLLEGE:
+            bo = book_odds(lg, [x.strftime("%Y%m%d") for x in cdays])
+            json.dump(bo, open(os.path.join(d, f"books_{lg}.json"), "w"))
+            t = tickets(lg, [x.strftime("%Y%m%d") for x in cdays])
+            json.dump(t, open(os.path.join(d, f"tickets_{lg}.json"), "w"))
+            print("college", lg, "sportsbook odds", len(bo), "games | tickets", len(t), "with figures", sum(1 for x in t if x.get("home_t") is not None))
+            for mk, series in (("spread", "KXNCAAMBSPREAD"), ("total", "KXNCAAMBTOTAL")):
+                k = kalshi_college(series, ccodes)
+                json.dump(k, open(os.path.join(d, f"kalshi_{lg}_{mk}.json"), "w"))
+                print("college kalshi", series, "markets", k["n"], "events", len(k["o"]))
+        cc = college_context(games)
+        json.dump(cc, open(os.path.join(d, "context_college.json"), "w"))
+        print("college context", len(cc), "games")
+    except Exception as e:  # noqa: BLE001  (college is watch-only: never let it break the NBA/NFL run)
+        print("college fetch failed", e)
     for lg in ("nba", "nfl"):
         bo = book_odds(lg, [x.strftime("%Y%m%d") for x in days])
         json.dump(bo, open(os.path.join(d, f"books_{lg}.json"), "w"))

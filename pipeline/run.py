@@ -4,6 +4,10 @@ python3 pipeline/run.py refresh   # pull lines, prices, bets and context; score;
 python3 pipeline/run.py grade     # pull final scores; grade open picks; accuracy and move rows; refit model.json
 python3 pipeline/run.py backfill  # one-off: every finished game this season into hist.json, then refit model.json
 Run from the repository root. Uses only the Python standard library.
+
+College basketball (watch-only) runs as its own track after the NBA/NFL sheet: same scoring and grading code, its own
+state file (college.json), its own accuracy and move tables (college_calib.json, college_moves.json) and its own
+model (model.json "college"). A college failure is logged and never stops the main sheet.
 """
 import json, os, shutil, subprocess, sys
 from datetime import datetime, timedelta, timezone
@@ -38,13 +42,14 @@ def main():
     if not skip_fetch:
         py("fetch.py", mode, w("in"))
     py("merge.py", w("in"), w("raw.json"), w("finals.json"), now)
+    split_raw(w("raw.json"), w("raw_pro.json"), w("raw_college.json"))
     if mode == "grade":
         py("grade.py", w("finals.json"), w("state"), w("gradeout"), os.path.join(ROOT, "results.json"))
         py("pack.py", "pack", w("state"), w("none"), w("gradeout"), data, now)
         update_calib(w("gradeout", "calib"), now)
         update_table("moves.json", MOVES_COLS, w("gradeout", "moves"), now, MOVES_DAYS)
     else:
-        py("score.py", w("raw.json"), w("out"), "--prev", w("state"))
+        py("score.py", w("raw_pro.json"), w("out"), "--prev", w("state"))
         update_snaps(w("out", "snaps_new.json"), now)
         py("reads.py", w("out", "slates"))
         py("pack.py", "pack", w("state"), w("out"), w("none"), data, now)
@@ -61,14 +66,46 @@ def main():
             with open(os.path.join(ROOT, "props.json"), "w") as f:
                 json.dump(pr, f, separators=(",", ":"))
             print("props.json", len(pr.get("players", [])), "players")
+    college(mode, now, w)
     update_results(w("in", "results_new.json"), now)
     update_hist(w("in", "hist_new.json"), now)
     if mode == "grade":
         py("learn.py", ROOT)
 
 
+COLLEGE_LGS = ("NCAAB",)
+COLLEGE_KEEP_DAYS = 2   # college slates are big (dozens of games a day): keep enough to grade, not three weeks
+
+
+def split_raw(src, pro, college_dst):
+    raw = read_json(src, None)
+    if not raw:
+        return
+    for dst, sel in ((pro, lambda g: g["league"] not in COLLEGE_LGS), (college_dst, lambda g: g["league"] in COLLEGE_LGS)):
+        with open(dst, "w") as f:
+            json.dump(dict(raw, games=[g for g in raw["games"] if sel(g)]), f)
+
+
+def college(mode, now, w):
+    """The watch-only college track: score (refresh) or grade (nightly) into college.json."""
+    dst = os.path.join(ROOT, "college.json")
+    try:
+        py("pack.py", "unpack", dst, w("cstate"))
+        if mode == "grade":
+            py("grade.py", w("finals.json"), w("cstate"), w("cgradeout"))
+            py("pack.py", "pack", w("cstate"), w("none"), w("cgradeout"), dst, now, str(COLLEGE_KEEP_DAYS))
+            update_calib(w("cgradeout", "calib"), now, "college_calib.json")
+            update_table("college_moves.json", MOVES_COLS, w("cgradeout", "moves"), now, MOVES_DAYS)
+        else:
+            py("score.py", w("raw_college.json"), w("cout"), "--prev", w("cstate"))
+            update_snaps(w("cout", "snaps_new.json"), now)
+            py("pack.py", "pack", w("cstate"), w("cout"), w("none"), dst, now, str(COLLEGE_KEEP_DAYS))
+    except Exception as e:  # noqa: BLE001
+        print("college track failed (watch-only; the NBA/NFL sheet is unaffected):", e)
+
+
 RESULTS_DAYS = 14
-SNAPS_DAYS = 10
+SNAPS_DAYS = 4   # snapshots are turned into move rows the first night a game is graded
 MOVES_DAYS = 240
 sys.path.insert(0, HERE)
 from score import MOVE_FEATS  # noqa: E402
@@ -151,11 +188,11 @@ def closed_ladders(now):
     return {k: v for k, v in closed.items() if v.get("start", "") >= cutoff}
 
 
-def update_calib(src, now):
+def update_calib(src, now, name="calib.json"):
     """Fold the night's accuracy rows (every finished game, every source's pre-game probability) into calib.json."""
     if not os.path.isdir(src):
         return
-    dst = os.path.join(ROOT, "calib.json")
+    dst = os.path.join(ROOT, name)
     cur = {"cols": CALIB_COLS, "rows": {}}
     if os.path.exists(dst):
         with open(dst) as f:
@@ -171,7 +208,7 @@ def update_calib(src, now):
     cur = {"cols": CALIB_COLS, "updatedAt": now, "rows": {k: v for k, v in rows.items() if v[0] >= cutoff}}
     with open(dst, "w") as f:
         json.dump(cur, f, separators=(",", ":"))
-    print("calib.json", len(cur["rows"]), "rows,", n, "from this run")
+    print(name, len(cur["rows"]), "rows,", n, "from this run")
 
 
 def update_results(src, now):

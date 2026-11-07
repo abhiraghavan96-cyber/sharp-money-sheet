@@ -5,7 +5,8 @@ in_dir holds any of: espn.json, kalshi_nba_spread.json, kalshi_nba_total.json,
 kalshi_nfl_spread.json, kalshi_nfl_total.json, tickets_nba.json, tickets_nfl.json,
 context.json (SNIPPET CONTEXT output) and notes.json (the analyst reads written for this run)
 """
-import json, os, sys
+import json, os, re, sys, unicodedata
+from datetime import datetime, timedelta
 
 KALSHI_ALIAS = {
     "NBA": {"UTAH": ["UTA"], "SA": ["SAS"], "NO": ["NOP"], "GS": ["GSW"], "NY": ["NYK"], "WSH": ["WAS"], "BKN": ["BKN", "BRK"], "PHX": ["PHX", "PHO"]},
@@ -33,6 +34,114 @@ def find_event(o, lg, away, home):
     return None
 
 
+# ---------- college (watch-only): sources disagree on team abbreviations, so games are matched by team name ----------
+COLLEGE = ("NCAAB",)
+MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+
+
+def norm_team(s):
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower().replace("&", " and ").replace("-", " ")
+    s = re.sub(r"[().,'\u2019]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\bst$", "state", s)        # "Kansas St." = "Kansas State"
+    s = re.sub(r"^saint\b", "st", s)        # "Saint Mary's" = "St. Mary's"
+    return s
+
+
+def same_team(abbr_a, names_a, abbr_b, names_b):
+    na, nb = {norm_team(x) for x in names_a or [] if x}, {norm_team(x) for x in names_b or [] if x}
+    return bool(na & nb) or bool(abbr_a and abbr_b and abbr_a == abbr_b)
+
+
+def ts(iso):
+    return datetime.strptime((iso or "")[:16], "%Y-%m-%dT%H:%M")
+
+
+def match_an(entries, g):
+    """Action Network entry for this game (same start within 3 hours, both teams matched); (entry, reversed) or (None, False).
+    reversed = Action Network lists the teams the other way round (it happens at neutral sites)."""
+    gh, ga = (g["home"], g.get("homeNames")), (g["away"], g.get("awayNames"))
+    for e in entries or []:
+        try:
+            if abs((ts(e.get("start")) - ts(g["start"])).total_seconds()) > 3 * 3600:
+                continue
+        except ValueError:
+            continue
+        eh, ea = (e.get("home"), e.get("homeNames")), (e.get("away"), e.get("awayNames"))
+        if same_team(*eh, *gh) and same_team(*ea, *ga):
+            return e, False
+        if same_team(*eh, *ga) and same_team(*ea, *gh):
+            return e, True
+    return None, False
+
+
+def kalshi_title_names(title):
+    t = re.split(r":", title or "")[0]
+    parts = re.split(r"\s+(?:at|vs\.?|@)\s+", t, flags=re.I)
+    return [p.strip() for p in parts] if len(parts) == 2 else None
+
+
+def match_kalshi(kf, g):
+    """(event key, {"home": code, "away": code} or None) for this game in one Kalshi college file, or (None, None)."""
+    if not kf or not kf.get("o"):
+        return None, None
+    d = datetime.strptime(g["date"], "%Y-%m-%d")
+    dcodes = {f"{x.strftime('%y')}{MONTHS[x.month - 1]}{x.strftime('%d')}" for x in (d - timedelta(days=1), d, d + timedelta(days=1))}
+    for key in kf["o"]:
+        dc, teams = key[:7], key[7:]
+        if dc not in dcodes:
+            continue
+        if teams == g["away"] + g["home"]:
+            return key, {"away": g["away"], "home": g["home"]}
+        nm = kalshi_title_names((kf.get("t") or {}).get(key))
+        if not nm:
+            continue
+        a_n, h_n = nm
+        if (same_team(None, [a_n], None, g.get("awayNames")) and same_team(None, [h_n], None, g.get("homeNames"))) or \
+           (same_team(None, [a_n], None, g.get("homeNames")) and same_team(None, [h_n], None, g.get("awayNames"))):
+            codes = {}
+            for code, name in ((kf.get("names") or {}).get(key) or {}).items():
+                for side in ("home", "away"):
+                    if same_team(None, [name], None, g.get(side + "Names")):
+                        codes[side] = code
+            for side, pos in (("away", "start"), ("home", "end")):   # fall back to where a code sits in the event name
+                if side not in codes:
+                    for code in (kf["o"][key] if isinstance(kf["o"][key], dict) else {}):
+                        if (teams.startswith(code) if pos == "start" else teams.endswith(code)) and code not in codes.values():
+                            codes[side] = code
+            return key, codes
+    return None, None
+
+
+def college_fill(r, g, kc, tickets, books, ctx):
+    """Kalshi, public bets, sportsbook prices and ESPN context for one college game."""
+    if g.get("spread"):
+        r["spread"] = g["spread"]
+        fav = "home" if g["spread"]["home"][2] < 0 else "away"
+        key, codes = match_kalshi(kc.get("spread"), g)
+        if key and codes and codes.get(fav) and codes[fav] in kc["spread"]["o"][key]:
+            r["kSpread"] = {"fav": fav, "q": kc["spread"]["o"][key][codes[fav]]}
+    if g.get("total"):
+        r["total"] = g["total"]
+        key, _ = match_kalshi(kc.get("total"), g)
+        if key:
+            r["kTotal"] = kc["total"]["o"][key]
+    t, rev = match_an(tickets, g)
+    if t:
+        vals = {"home": t.get("away_t" if rev else "home_t"), "away": t.get("home_t" if rev else "away_t"), "over": t.get("over_t"), "under": t.get("under_t")}
+        if all(v is not None for v in vals.values()):
+            r["tickets"] = dict(vals, bets=t.get("bets"))
+    b, rev = match_an(books, g)
+    if b:
+        bk = b["books"]
+        if rev:
+            sw = lambda m: {"home": m["away"], "away": m["home"]} if m else m
+            bk = {name: {k: (sw(v) if k in ("spread", "ml") else v) for k, v in x.items()} for name, x in bk.items()}
+        r["books"] = bk
+    if ctx.get(g["id"]):
+        r["ctx"] = ctx[g["id"]]
+
+
 def main():
     d, out_raw, out_finals, captured = sys.argv[1:5]
     espn = load(d, "espn.json") or []
@@ -44,6 +153,9 @@ def main():
     stand = load(d, "standings.json") or {}
     wx = load(d, "weather.json") or {}
     lg_avg = {lg: sum(t["pf"] for t in st.values()) / len(st) for lg, st in stand.items() if st}
+    kc = {m: load(d, f"kalshi_ncaab_{m}.json") for m in ("spread", "total")}
+    tickets_c, books_c = load(d, "tickets_ncaab.json") or [], load(d, "books_ncaab.json") or []
+    ctx_c = load(d, "context_college.json") or {}
     games, finals = [], []
     for g in espn:
         lg = g["league"]
@@ -52,6 +164,13 @@ def main():
             pass  # started or final: score.py freezes it from the previous slate
         r = {x: g[x] for x in ("league", "date", "id", "start", "away", "awayName", "home", "homeName")}
         r["neutral"] = bool(g.get("neutral"))
+        if lg in COLLEGE:
+            try:
+                college_fill(r, g, kc, tickets_c, books_c, ctx_c)
+                games.append(r)
+            except Exception as e:  # noqa: BLE001  (watch-only: a bad college row is dropped, never the run)
+                print("college merge failed", g.get("id"), e)
+            continue
         if g.get("spread"):
             r["spread"] = g["spread"]
             fav = "home" if g["spread"]["home"][2] < 0 else "away"
@@ -97,9 +216,11 @@ def main():
         "tickets": "Action Network consensus share of bets (free figures only)"}, "games": games}
     json.dump(raw, open(out_raw, "w"))
     json.dump(finals, open(out_finals, "w"))
-    print("games", len(games), "with kalshi spread", sum(1 for g in games if g.get("kSpread")),
-          "kalshi total", sum(1 for g in games if g.get("kTotal")), "tickets", sum(1 for g in games if g.get("tickets")),
-          "books", sum(1 for g in games if g.get("books")))
+    for label, sel in (("games", lambda g: g["league"] not in COLLEGE), ("college games", lambda g: g["league"] in COLLEGE)):
+        gs = [g for g in games if sel(g)]
+        print(label, len(gs), "with lines", sum(1 for g in gs if g.get("spread") or g.get("total")), "kalshi spread", sum(1 for g in gs if g.get("kSpread")),
+              "kalshi total", sum(1 for g in gs if g.get("kTotal")), "tickets", sum(1 for g in gs if g.get("tickets")),
+              "books", sum(1 for g in gs if g.get("books")))
 
 
 if __name__ == "__main__":

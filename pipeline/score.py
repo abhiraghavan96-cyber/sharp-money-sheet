@@ -8,7 +8,8 @@ from the repository root when present.
 import json, sys, os, math
 from datetime import datetime, timezone, timedelta
 
-STEAM = {"NBA": {"spread": 2.0, "total": 3.0}, "NFL": {"spread": 1.5, "total": 2.0}}
+STEAM = {"NBA": {"spread": 2.0, "total": 3.0}, "NFL": {"spread": 1.5, "total": 2.0}, "NCAAB": {"spread": 1.5, "total": 2.5}}
+COLLEGE = ("NCAAB",)     # watch-only: own model (model.json "college"), picks flagged watch, never the best bet
 NEWS_MULT = 2.5          # a move bigger than 2.5 steam moves is treated as news (injury, QB change)
 KALSHI_MAX_WIDTH = 0.04  # ignore Kalshi quotes wider than 4 cents
 FEE_RATE = 0.07          # assumed Kalshi taker fee: 0.07 * p * (1 - p) per contract
@@ -46,8 +47,10 @@ def fmt_line(x):
     return ("+" if x > 0 else "-") + s
 
 
-CONS_SLOPE = {("NBA", "spread"): 0.03, ("NBA", "total"): 0.02, ("NFL", "spread"): 0.03, ("NFL", "total"): 0.025}
-CONS_MAXDIFF = {("NBA", "spread"): 3.0, ("NBA", "total"): 6.0, ("NFL", "spread"): 3.0, ("NFL", "total"): 4.0}
+CONS_SLOPE = {("NBA", "spread"): 0.03, ("NBA", "total"): 0.02, ("NFL", "spread"): 0.03, ("NFL", "total"): 0.025,
+              ("NCAAB", "spread"): 0.035, ("NCAAB", "total"): 0.025}
+CONS_MAXDIFF = {("NBA", "spread"): 3.0, ("NBA", "total"): 6.0, ("NFL", "spread"): 3.0, ("NFL", "total"): 4.0,
+                ("NCAAB", "spread"): 3.0, ("NCAAB", "total"): 6.0}
 CONS_MIN_BOOKS = 3
 
 
@@ -207,7 +210,7 @@ def side_eval(g, mtype, key, other):
     }
 
 
-SD_MARGIN = {"NBA": 12.0, "NFL": 13.5}   # spread of final margins, for turning a win probability into points
+SD_MARGIN = {"NBA": 12.0, "NFL": 13.5, "NCAAB": 11.0}   # spread of final margins, for turning a win probability into points
 MODEL_FAR = 6.0                          # a model this far from the market is probably missing news
 
 
@@ -216,11 +219,11 @@ def pt_date(iso):
     return d.date()
 
 
-HCA = {"NBA": 2.0, "NFL": 1.5}              # home-court / home-field points
-SHRINK = {"NBA": 10, "NFL": 4}             # games of evidence before a team's season numbers count half
+HCA = {"NBA": 2.0, "NFL": 1.5, "NCAAB": 3.0}              # home-court / home-field points
+SHRINK = {"NBA": 10, "NFL": 4, "NCAAB": 6}             # games of evidence before a team's season numbers count half
 # power-rating edge (points): credit starts, full credit, and "too far, probably news"
-POWER_SPREAD = {"NBA": (1.0, 5.0, 9.0), "NFL": (0.5, 3.5, 8.0)}
-POWER_TOTAL = {"NBA": (2.0, 8.0, 16.0), "NFL": (1.0, 5.0, 10.0)}
+POWER_SPREAD = {"NBA": (1.0, 5.0, 9.0), "NFL": (0.5, 3.5, 8.0), "NCAAB": (1.0, 5.0, 10.0)}
+POWER_TOTAL = {"NBA": (2.0, 8.0, 16.0), "NFL": (1.0, 5.0, 10.0), "NCAAB": (2.0, 8.0, 16.0)}
 
 
 def power(g):
@@ -337,7 +340,7 @@ def situation(g, mtype, key):
     return sig, avail, info
 
 
-SD_TOTAL = {"NBA": 18.0, "NFL": 13.5}
+SD_TOTAL = {"NBA": 18.0, "NFL": 13.5, "NCAAB": 15.5}
 
 
 def model_probs(g, sp, tt):
@@ -538,6 +541,14 @@ def load_model(path=None):
         return {}
 
 
+def model_for(model, lg):
+    """The model a league is scored with: NBA/NFL share the main fit; college has its own (priors until it's fitted)."""
+    if lg in COLLEGE:
+        c = ((model or {}).get("college") or {}).get(lg) or {}
+        return {"ratings": (model or {}).get("ratings"), "move": c.get("move"), "result": c.get("result")}
+    return model
+
+
 def kalshi_side_quote(g, mtype, key, mk):
     """(bid, ask) for one side at a limit order's strike in this snapshot, or None."""
     if mtype == "spread":
@@ -602,10 +613,11 @@ def build(raw, prev=None, model=None, snaps=None):
         mk = [m for m in (market_eval(g, "spread"), market_eval(g, "total")) if m]
         probs = model_probs(g, next((m for m in mk if m["type"] == "spread"), None), next((m for m in mk if m["type"] == "total"), None))
         rl = None
+        mdl = model_for(model, g["league"])
         for m in mk:
             pr = probs.get(m["type"])
-            ft = market_features(g, m, now, model)
-            fe = fair_eval(ft, model)
+            ft = market_features(g, m, now, mdl)
+            fe = fair_eval(ft, mdl)
             rl = rl or ft["ratingLine"]
             key = "home" if m["type"] == "spread" else "over"
             for sd in m["sides"]:
@@ -660,12 +672,13 @@ def build(raw, prev=None, model=None, snaps=None):
                     if s.get("ev") is not None and s["ev"] >= EV_PICK and s.get("consensus"):
                         cands.append((s["ev"], game, m, s))
         cands.sort(key=lambda c: -c[0])
+        pro_c = [c for c in cands if c[1]["league"] not in COLLEGE]
         best = None
         pslate = prev["slates"].get(date)
         if pslate and pslate.get("best"):
             best = pslate["best"]
-        elif cands and cands[0][0] >= EV_BEST:
-            ev, game, m, s = cands[0]
+        elif pro_c and pro_c[0][0] >= EV_BEST:   # watch-only college picks are never the best bet
+            ev, game, m, s = pro_c[0]
             best = {"gameId": game["id"], "market": m["type"], "side": s["key"], "label": s["label"], "score": s["score"], "ev": ev, "method": 3}
         for ev, game, m, s in cands:
             pid = f"{date}-{game['id']}-{m['type']}-{s['key']}"
@@ -680,7 +693,7 @@ def build(raw, prev=None, model=None, snaps=None):
                 "label": s["label"], "line": s["line"], "price": price, "score": sc,
                 "signals": s["signals"], "isBest": is_best, "flaggedAt": now, "status": "open",
                 "modelProb": s.get("modelProb"), "consProb": (s.get("consensus") or {}).get("prob") or s["dkFair"],
-                "method": 3, "ev": s["ev"], "fair": s["fair"], "fairNow": s["fairNow"], "expMove": s["expMove"], "tilt": s["tilt"],
+                "method": 3, "watch": game["league"] in COLLEGE, "ev": s["ev"], "fair": s["fair"], "fairNow": s["fairNow"], "expMove": s["expMove"], "tilt": s["tilt"],
                 "kelly": s["best"]["kelly"], "contrib": s["contrib"],
                 "maker": (dict(s["kalshiMaker"], status="posted", postedAt=now)   # only worth posting when it beats taking the best price
                           if s.get("kalshiMaker") and s["kalshiMaker"]["breakEven"] < price["breakEven"] - 1e-9 else None),
