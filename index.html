@@ -518,16 +518,17 @@ function renderCollege() {
   let date = state.cdate && C.slates[state.cdate] ? state.cdate : null;
   if (!date) { const ahead = dates.filter(d => d >= t); date = ahead.find(d => (C.slates[d].games || []).some(g => Date.parse(g.start) > now)) || ahead[0] || dates[dates.length - 1]; }
   state.cdate = date;
-  const s = C.slates[date], games = s.games || [];
+  const s = C.slates[date], every = s.games || [], games = every.filter(g => g.hasLines), unlined = every.length - games.length;
   const edge = g => (g.markets || []).some(m => m.sides.some(x => (x.ev ?? -1) >= EV_PICK));
   const shown = state.cfilter === "picks" ? games.filter(edge) : games, log = picks.slice(0, 60);
   return `<div style="display:grid;gap:20px">${head}
-    <div class="toolbar"><div class="dates" role="group" aria-label="Choose college slate">${dates.map(d => `<button type="button" data-cdate="${d}" aria-pressed="${d === date}">${dayFmt(d, { weekday: "short", month: "short", day: "numeric" })}<small>${(C.slates[d].games || []).length} games</small></button>`).join("")}</div></div>
+    <div class="toolbar"><div class="dates" role="group" aria-label="Choose college slate">${dates.map(d => `<button type="button" data-cdate="${d}" aria-pressed="${d === date}">${dayFmt(d, { weekday: "short", month: "short", day: "numeric" })}<small>${(C.slates[d].games || []).filter(g => g.hasLines).length} with lines</small></button>`).join("")}</div></div>
     <div class="fresh"><span>Updated <b>${esc(stampFmt(s.updatedAt))}</b></span><span>Lines: DraftKings</span><span>Prices: Kalshi</span><span>Bets %: ${games.some(g => g.hasTickets) ? "Action Network" : "<b>not posted yet</b>"}</span></div>
     <section style="display:grid;gap:12px" aria-label="College games">
       <div class="section-head"><h2>The board</h2>
         <div class="filters" role="group" aria-label="Filter college games">${[["all", `All ${games.length}`], ["picks", `Edge 1.5%+ · ${games.filter(edge).length}`]].map(([k, l]) => `<button type="button" data-cfilter="${k}" aria-pressed="${state.cfilter === k}">${l}</button>`).join("")}</div></div>
-      <div class="games">${shown.length ? shown.map(g => renderGame(g, s)).join("") : `<div class="note">No college side has a 1.5% edge on this slate.</div>`}</div>
+      <div class="games">${shown.length ? shown.map(g => renderGame(g, s)).join("") : `<div class="note">${state.cfilter === "picks" ? "No college side has a 1.5% edge on this slate." : "No college lines posted for this day yet."}</div>`}</div>
+      ${unlined ? `<p class="fine">${unlined} more game${unlined === 1 ? " has" : "s have"} no DraftKings line yet (often small-school games) and ${unlined === 1 ? "isn't" : "aren't"} shown.</p>` : ""}
     </section>
     <div class="card"><h3>Watch-only pick log</h3>
       ${log.length ? `<div class="tbl-wrap"><table class="log"><thead><tr><th>Day</th><th>Pick</th><th>Game</th><th class="n">Edge</th><th>Taken</th><th class="n">CLV</th><th>Result</th></tr></thead><tbody>
