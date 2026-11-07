@@ -16,6 +16,16 @@ It runs on its own. GitHub Actions pulls fresh data every hour through the day, 
 
 Share the link from step 5 with your friends. That's it.
 
+## Install it like an app
+
+The site is an installable web app (a home-screen icon, full screen, works offline with the last data it loaded). No app store needed.
+
+- **iPhone or iPad:** open the link in Safari, tap the Share button, then **Add to Home Screen**.
+- **Android:** open the link in Chrome and tap **Install app** (or the Install banner the page shows).
+- **Computer:** in Chrome or Edge, click the install icon at the right of the address bar.
+
+When the app comes back to the front after 10 minutes or more, it reloads the latest data on its own.
+
 ## What runs when
 
 | Time (Pacific) | Job |
@@ -42,6 +52,7 @@ Times shift an hour during daylight saving time, because GitHub schedules run on
 | Path | What it is |
 | --- | --- |
 | `index.html` | The site |
+| `manifest.webmanifest`, `sw.js`, `icon-*.png`, `apple-touch-icon.png` | What makes it installable: app name and icons, and the offline cache |
 | `data.json` | Everything the site shows: slates, picks, record |
 | `props.json` | Players, Kalshi prop ladders, team ratings for Test a bet, and closing prop prices for CLV |
 | `results.json` | Final scores and box scores from the last 14 days, for grading My trades |

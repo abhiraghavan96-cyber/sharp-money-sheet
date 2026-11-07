@@ -1,0 +1,22 @@
+{
+  "id": "./",
+  "name": "Sharp Money Sheet",
+  "short_name": "Sharp Sheet",
+  "description": "NFL and NBA fair prices, edges at the best available price, bet simulations and a paper-trading record graded against the closing line.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0B1019",
+  "theme_color": "#0B1019",
+  "categories": ["sports"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Test a bet", "url": "./#test" },
+    { "name": "My trades", "url": "./#trades" },
+    { "name": "Record", "url": "./#record" }
+  ]
+}

@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="Daily NFL and NBA betting sheet: DraftKings lines, Kalshi prices, public bets, situation factors and one scored best bet, with a paper-trading record.">
 <meta name="robots" content="noindex">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0B1019" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F3F1EC" media="(prefers-color-scheme: light)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Sharp Sheet">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
 </head>
 <body>
@@ -179,6 +188,12 @@ table.log .n { font-family: var(--f-mono); font-variant-numeric: tabular-nums; t
 .weights .d { font-size: 13px; color: var(--muted); }
 .fine { font-size: 12.5px; color: var(--muted); }
 footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; }
+.install { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; border: 1px solid var(--gold); background: var(--gold-soft); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; }
+.install b { font-weight: 600; }
+.install .grow { flex: 1 1 220px; }
+.install button { font: inherit; font-size: 13px; border-radius: 8px; padding: 6px 12px; cursor: pointer; border: 1px solid var(--gold); background: var(--gold); color: var(--bg); font-weight: 600; }
+.install button.x { background: none; color: var(--muted); border-color: var(--line); font-weight: 400; }
+.offline { font-size: 12.5px; color: var(--warn); }
 
 /* test a bet */
 .ask { display: grid; gap: 8px; }
@@ -247,8 +262,9 @@ td.acts button { border: 1px solid var(--line); background: var(--panel-2); bord
       <button type="button" id="v-method" data-view="method">Method</button>
     </nav>
   </header>
+  <div id="install" class="install" hidden></div>
   <main id="main" aria-live="polite"><div class="note">Loading the latest slate…</div></main>
-  <footer>For research and entertainment among friends. Not betting advice. Lines and prices move; check them before acting. If gambling stops being fun, call 1-800-GAMBLER.</footer>
+  <footer>Install it: on iPhone, Share then Add to Home Screen; on Android, the browser's Install app option. For research and entertainment among friends. Not betting advice. Lines and prices move; check them before acting. If gambling stops being fun, call 1-800-GAMBLER.</footer>
 </div>
 
 <script>
@@ -1567,15 +1583,54 @@ $("#main").addEventListener("submit", e => {
 });
 $("#main").addEventListener("change", e => { if (e.target.matches("input[data-act=import]") && e.target.files[0]) importTrades(e.target.files[0]); });
 window.addEventListener("hashchange", () => { const v = location.hash.slice(1).split("?")[0]; if (["slate", "test", "trades", "record", "method"].includes(v) && v !== state.view) { if (v === "trades") state.results = null; setView(v); } });
-(async function start() {
-  const v = location.hash.slice(1).split("?")[0], hq = new URLSearchParams(location.hash.split("?")[1] || "").get("q");
-  setView(["slate", "test", "trades", "record", "method"].includes(v) ? v : "slate");
+/* ---------- install as an app ---------- */
+const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+let installEvt = null;
+function seen(k, set) { try { if (set) localStorage.setItem(k, "1"); return localStorage.getItem(k) === "1"; } catch (e) { return false; } }
+function showInstall() {
+  const el = $("#install");
+  if (standalone() || seen("sms.installHint")) { el.hidden = true; return; }
+  if (installEvt) el.innerHTML = `<span class="grow"><b>Install Sharp Money Sheet</b> as an app on this device. It opens full screen from your home screen and works offline with the last data it loaded.</span><button type="button" data-inst="go">Install</button><button type="button" class="x" data-inst="no">Not now</button>`;
+  else if (isIOS) el.innerHTML = `<span class="grow"><b>Install on iPhone:</b> tap the Share button in Safari, then <b>Add to Home Screen</b>. It opens full screen like an app.</span><button type="button" class="x" data-inst="no">Got it</button>`;
+  else { el.hidden = true; return; }
+  el.hidden = false;
+}
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; showInstall(); });
+window.addEventListener("appinstalled", () => { installEvt = null; seen("sms.installHint", true); showInstall(); });
+$("#install").addEventListener("click", async e => {
+  const b = e.target.closest("button[data-inst]"); if (!b) return;
+  if (b.dataset.inst === "go" && installEvt) { installEvt.prompt(); try { await installEvt.userChoice; } catch (err) { /* dismissed */ } installEvt = null; }
+  seen("sms.installHint", true); showInstall();
+});
+if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+
+async function loadData() {
   try {
     const r = await fetch("data.json", { cache: "no-store" });
     if (!r.ok) throw new Error("status " + r.status);
-    state.data = await r.json();
-  } catch (e) { state.error = e.message || "network error"; }
+    state.data = await r.json(); state.error = null; state.loadedAt = Date.now();
+  } catch (e) { if (!state.data) state.error = e.message || "network error"; }
+}
+// an installed app can sit in the background for hours: reload the data when it comes back to the front
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState !== "visible" || !state.loadedAt || Date.now() - state.loadedAt < 10 * 60e3) return;
+  const before = state.data && state.data.updatedAt;
+  await loadData();
+  if (state.data && state.data.updatedAt !== before) {
+    state.props = null; state.propsP = null; state.board = null; state.results = null; state.calib = null; state.model = null;
+    if (state.view === "test") loadProps().then(() => { if (state.view === "test") render(); });
+    if (state.view === "record") loadCalib().then(() => { if (state.view === "record") render(); });
+    if (state.view === "method") loadModel().then(() => { if (state.view === "method") render(); });
+    render();
+  }
+});
+(async function start() {
+  const v = location.hash.slice(1).split("?")[0], hq = new URLSearchParams(location.hash.split("?")[1] || "").get("q");
+  setView(["slate", "test", "trades", "record", "method"].includes(v) ? v : "slate");
+  await loadData();
   render();
+  showInstall();
   if (state.view === "test" && hq && state.data) runQuery(hq);
 })();
 </script>
