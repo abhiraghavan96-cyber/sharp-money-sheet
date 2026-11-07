@@ -657,7 +657,7 @@ function renderMethod() {
       <div><span class="w sit">10</span><span class="t">Wind</span><span class="d">Outdoor NFL games only. Kickoff wind forecast from Open-Meteo; credit to the under from 10 mph, full at 20.</span></div>
     </div>
     <h3 style="font-size:20px">Test a bet</h3>
-    <p>Ask about any side, total or player prop on the board, like "Luka 45+ points" or "Lakers -3.5". The sheet simulates the game 10,000 times and reports how many of every 100 the bet wins. Game lines draw the margin or total from a bell curve centered on the market, nudged by ESPN's model and the power rating. Player props replay the player's own games, with last season as a prior worth about seven of this season's games, scaled to tonight's minutes, matchup and missing teammates. The price comes from Kalshi's ladder for that line, or from odds you type, like "at +150".</p>
+    <p>Ask about any side, total or player prop in a game that hasn't started, up to three days ahead, like "Luka 45+ points" or "Lakers -3.5". The sheet simulates the game 10,000 times and reports how many of every 100 the bet wins. Game lines draw the margin or total from a bell curve centered on the fair price. Player props replay the player's own games, with last season as a prior worth about seven of this season's games, scaled to tonight's minutes, matchup and missing teammates. Every regular in each team's rotation can be simulated; the price comes from Kalshi's ladder when Kalshi lists that player (usually on game day), or from odds you type, like "at +150".</p>
     <p>Parlays: join legs with a plus sign, like "Luka 30+ points + Lakers -3.5". Legs from the same game are simulated together, so a star's points move with his team's score and the total; legs from different games are independent. Every day the tab also shows its best available parlay (the best leg from each of two or three games by expected return, each between a 45% and 80% chance, with prop chances blended 35% simulation and 65% market price, and skipping legs where the sim is more than 12 points from the market) with the expected return stated, even when it's negative, and a table of where the simulation and the books disagree most.</p>
     <p>My trades records paper trades on your own device and grades them each night from final scores and box scores. A parlay with a pushed leg pays the remaining legs; a player who doesn't play voids his leg. Each trade also gets its closing-line value: the fair chance at your line when the game started, minus the chance your odds needed.</p>
     <h3 style="font-size:20px">Testing the method itself</h3>
@@ -736,6 +736,11 @@ function upcomingGames() {
   for (const s of Object.values(state.data.slates || {})) for (const g of s.games || []) if (Date.parse(g.start) > now && !g.frozen) out.push(g);
   return out.sort((a, b) => a.start.localeCompare(b.start));
 }
+function startedGames() {   // today's games already under way or finished (still in the slates)
+  const now = Date.now(), out = [];
+  for (const s of Object.values(state.data.slates || {})) for (const g of s.games || []) { const t = Date.parse(g.start); if (t <= now && now - t < 18 * 3600e3) out.push(g); }
+  return out;
+}
 function findGame(id) {
   for (const s of Object.values(state.data.slates || {})) { const g = (s.games || []).find(x => x.id === id); if (g) return g; }
   return null;
@@ -751,12 +756,12 @@ function teamHits(txt, raw, games) {
   }
   return hits;
 }
-function playerHits(txt) {
+function playerHits(txt, started) {
   const now = Date.now(), seen = new Map();
   let t = txt;
   for (const [k, v] of Object.entries(NICK)) if (hasWord(t, k)) t += " " + v;
   for (const p of (state.props && state.props.players) || []) {
-    if (Date.parse(p.start) <= now) continue;
+    if (started ? (Date.parse(p.start) > now || now - Date.parse(p.start) > 18 * 3600e3) : Date.parse(p.start) <= now) continue;
     const n = fold(p.name).replace(/[^a-z \-]/g, ""), parts = n.split(/[\s]+/), last = parts.slice(-1)[0], first = parts[0];
     let sc = 0;
     if (t.includes(n)) sc = 10; else if (parts.length > 1 && hasWord(t, last) && last.length > 2) sc = 6; else if (hasWord(t, first) && first.length > 2) sc = 3;
@@ -781,7 +786,9 @@ function parseBet(q) {
   const num = (rx) => { const r = txt.match(rx); return r ? parseFloat(r[1]) : null; };
   if (stat || (pl.length && !teamHits(txt, raw, games).length)) {
     if (stat === "unsupported") return { error: "unsupported", q: raw };
-    if (!pl.length) return { error: "player", q: raw };
+    if (!pl.length) { const sp = playerHits(txt, true); if (sp.length) return { error: "started", q: raw, g: findGame(sp[0].p.gameId), who: sp[0].p.name }; }
+    if (!pl.length && !teamHits(txt, raw, startedGames()).length) return { error: "player", q: raw };
+    if (!pl.length) return { error: "started", q: raw, g: teamHits(txt, raw, startedGames())[0].g };
     if (pl.length > 1) return { error: "ambiguous", q: raw, options: pl.map(x => x.p) };
     const p = pl[0].p;
     if (!stat || stat === "yds") stat = p.lg === "NFL" ? (p.pos === "QB" ? "passYds" : p.pos === "RB" ? "rushYds" : "recYds") : (stat === "yds" ? null : "pts");
@@ -802,7 +809,14 @@ function parseBet(q) {
     }
     return bet;
   }
-  const th = teamHits(txt, raw, games);
+  let th = teamHits(txt, raw, games);
+  if (!th.length) {   // "over 228.5" with no team: use the one game on the board with that total
+    const tn = num(/\b(?:over|under|o|u)\s*(\d+(?:\.\d+)?)/);
+    const byTotal = tn == null ? [] : games.filter(g => g.hasLines && g.markets.some(m => m.type === "total" && Math.abs(m.sides[0].line - tn) < 1e-9));
+    if (byTotal.length === 1) th = [{ g: byTotal[0], side: "home" }];
+    else if (byTotal.length > 1) return { error: "whichTotal", q: raw, options: byTotal };
+  }
+  if (!th.length) { const st = teamHits(txt, raw, startedGames()); if (st.length) return { error: "started", q: raw, g: st[0].g }; }
   if (!th.length) return { error: "none", q: raw };
   const both = th.find(a => th.some(b => b !== a && b.g.id === a.g.id));
   const pick = both || th[0];
@@ -1072,12 +1086,14 @@ function renderTestResult(res) {
   if (res.error === "toolong") return `<div class="note">Keep a parlay to six legs or fewer.</div>`;
   if (res.error) {
     const msg = {
-      player: "That player isn't in tonight's or tomorrow's prop markets on Kalshi, so there's no game log loaded for him.",
+      player: "That player isn't on a roster for any game in the next three days, or isn't a regular part of his team's rotation, so there's no game log loaded for him.",
+      started: `${res.g ? `${esc(res.g.away)} at ${esc(res.g.home)}` : "That game"} has already started${res.who ? ` (${esc(res.who)})` : ""}, so there's nothing left to simulate. Test a bet covers games that haven't begun, up to three days ahead.`,
+      whichTotal: `More than one game has that total: ${(res.options || []).map(g => `${esc(g.away)}–${esc(g.home)}`).join(", ")}. Add a team, like "${res.options && res.options[0] ? esc(res.options[0].home) : "LAL"} over ${esc(res.q.replace(/\D+/, ""))}".`,
       unsupported: "The sheet covers points, rebounds, assists, threes and PRA in the NBA, and passing, rushing and receiving yards and receptions in the NFL. That stat isn't one of them yet.",
       ambiguous: `More than one player matches: ${(res.options || []).map(p => esc(p.name)).join(", ")}. Add a last name.`,
       stat: res.p ? `Which stat for ${esc(res.p.name)}? Try points, rebounds, assists, threes or PRA${res.p.lg === "NFL" ? ", or passing, rushing or receiving yards, or receptions" : ""}.` : "Which stat?",
       line: "Add a number, like 30+ or over 27.5.",
-      none: "I couldn't tell which team or player you mean. Use a name from the board.",
+      none: "I couldn't tell which team or player you mean. Use a team or player from a game in the next three days, like the examples above.",
       nolines: "That game has no posted line yet, so there's nothing to simulate against.",
       side: "Both teams are named. Say which side, like \"LAL -2.5\", or ask for the over or under.",
       thin: "There aren't enough games on record for that player to simulate."
@@ -1120,6 +1136,11 @@ function examples() {
   for (const p of stars.slice(0, 2)) {
     const q = p.ladders.pts || p.ladders.passYds, k = q.slice().sort((a, b) => Math.abs((a[1] + a[2]) / 2 - .3) - Math.abs((b[1] + b[2]) / 2 - .3))[0];
     ex.push(`${p.name} ${k[0] + 0.5}+ ${p.ladders.pts ? "points" : "passing yards"}`);
+  }
+  if (ex.length < 2) {   // Kalshi lists props on game day; until then suggest the top scorers on the board
+    const avg = (p, i) => { const r = (p.cur || []).slice(0, 10); return r.length ? r.reduce((a, x) => a + (x[i] || 0), 0) / r.length : 0; };
+    const top = P.filter(p => Date.parse(p.start) > now && (p.cur || []).length >= 3).map(p => ({ p, v: p.lg === "NBA" ? avg(p, 1) : p.pos === "QB" ? avg(p, 0) : 0 })).filter(x => x.v > 0).sort((a, b) => b.v - a.v);
+    for (const { p, v } of top.slice(0, 2 - ex.length)) ex.push(p.lg === "NBA" ? `${p.name} ${Math.ceil(v + 2)}+ points` : `${p.name} ${Math.ceil((v + 15) / 10) * 10}+ passing yards`);
   }
   const ups = upcomingGames().filter(g => g.hasLines);
   const g = ups[0];
