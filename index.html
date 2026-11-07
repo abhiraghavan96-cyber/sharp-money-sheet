@@ -236,6 +236,9 @@ table.trades td.wrap { white-space: normal; min-width: 220px; }
 .leg.r-W b { color: var(--good); } .leg.r-L b { color: var(--bad); }
 td.acts { display: flex; gap: 4px; }
 td.acts button { border: 1px solid var(--line); background: var(--panel-2); border-radius: 6px; padding: 2px 7px; font-size: 12px; cursor: pointer; color: var(--muted); }
+.advice { margin: 4px 0 0; font-size: 14.5px; line-height: 1.45; border-left: 3px solid var(--gold); padding-left: 10px; }
+.chip.addleg { cursor: pointer; border-style: dashed; }
+.slip .legs li { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .best-test { justify-self: start; border: 1px solid var(--gold); color: var(--gold); background: none; border-radius: 9px; padding: 6px 12px; font-weight: 600; cursor: pointer; font-size: 13.5px; }
 
 @media (max-width: 640px) {
@@ -275,7 +278,7 @@ td.acts button { border: 1px solid var(--line); background: var(--panel-2); bord
 
 <script>
 const TZ = "America/Los_Angeles";
-const state = { view: "slate", date: null, filter: "all", data: null, error: null, q: "", result: null, props: null, propsErr: null, board: null, results: null, calib: null, calMkt: "all", recMethod: "all", model: null, savedMsg: null, tradeMsg: null, confirmDel: null, confirmClear: false, college: null, cdate: null, cfilter: "all" };
+const state = { view: "slate", date: null, filter: "all", data: null, error: null, q: "", result: null, props: null, propsErr: null, board: null, results: null, calib: null, calMkt: "all", recMethod: "all", model: null, savedMsg: null, tradeMsg: null, confirmDel: null, confirmClear: false, college: null, cdate: null, cfilter: "all", slip: [], slipMsg: null };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pct = (x, d = 0) => x == null ? "—" : (x * 100).toFixed(d) + "%";
@@ -392,6 +395,7 @@ function fairReasons(g, m, sd) {
     else if (k === "home" || k === "over") out.push(`This season, ${k === "home" ? "home sides" : "totals"} have tended to drift ${k === "home" ? (v * (sd.key === "home" ? 1 : -1) > 0 ? "toward the home team" : "toward the road team") : (v * (sd.key === "over" ? 1 : -1) > 0 ? "up" : "down")} before games (${toward ? "+" : "−"}${pts(v)} points).`);
     else out.push(`${CONTRIB[k] || k}: ${toward ? "+" : "−"}${pts(v)} points.`);
   }
+  if (g.ratingOff) out.unshift(`Neutral site${g.venue && g.venue.city ? ` (${g.venue.city})` : ""}: our team ratings come from ordinary home and away games, so they're switched off here. The market already has the venue priced.`);
   if (sd.best && sd.best.venue !== "DraftKings" && sd.best.breakEven < sd.dkBreakEven - 0.0005) out.push(`${sd.best.venue === "Kalshi" ? "Kalshi" : sd.best.venue} is the best price, ${pts(sd.dkBreakEven - sd.best.breakEven)} points cheaper than DraftKings.`);
   if (sd.newsMove || m.news) out.push(`The line moved enough to suggest news; the move so far is left out of the fair price.`);
   return out.slice(0, 5);
@@ -421,14 +425,14 @@ function priceBox(sd) {
     ${lim ? `<div class="venue"><span class="label">Kalshi limit order</span><span class="v">${Math.round(mk.limit * 100)}¢</span><span class="d">Post a bid and wait · needs ${pct(mk.breakEven, 1)} if it fills (maker fee) · may never fill</span></div>` : ""}
   </div>`;
 }
-function renderBest(s, g) {
-  const others = Object.values(state.data.picks || {}).filter(p => p.date === s.date && !p.isBest).sort((a, b) => (b.ev ?? b.score / 1000) - (a.ev ?? a.score / 1000)).slice(0, 4);
-  if (!s.best || !g) return `<div class="pass"><span class="eyebrow"><span class="tag">Best bet</span></span><h3 style="font-size:34px">Pass</h3><p class="muted">No side's best available price beats its fair price by 2.5% or more. No edge, no bet. Most days should look like this.</p></div>`;
+function renderBest(s, g, o = {}) {
+  const others = Object.values(o.picks || state.data.picks || {}).filter(p => p.date === s.date && !p.isBest).sort((a, b) => (b.ev ?? b.score / 1000) - (a.ev ?? a.score / 1000)).slice(0, 4);
+  if (!s.best || !g) return `<div class="pass"><span class="eyebrow"><span class="tag">${o.title || "Best bet"}</span>${o.watch ? `<span class="chip">Watch-only</span>` : ""}</span><h3 style="font-size:34px">Pass</h3><p class="muted">No side's best available price beats its fair price by 2.5% or more. No edge, no bet. Most days should look like this.</p></div>`;
   const m = g.markets.find(x => x.type === s.best.market), sd = m.sides.find(x => x.key === s.best.side);
   const r = sd.ev != null ? fairReasons(g, m, sd) : reasons(g, m, sd), note = g.note;
   return `<article class="best" aria-label="Best bet">
     <div class="best-top"><div>
-      <div class="eyebrow"><span class="tag">Best bet</span><span class="chip">Paper</span><span class="chip">${g.league} · ${dayFmt(s.date, { weekday: "short" })} ${timeFmt(g.start)} PT</span>${s.best.method !== 3 ? `<span class="chip" title="Chosen before the fair-price method started on Nov 7">Old signal-score pick${sd.ev != null && sd.ev < EV_BEST ? "; the fair-price method would pass" : ""}</span>` : ""}</div>
+      <div class="eyebrow"><span class="tag">${o.title || "Best bet"}</span><span class="chip">${o.watch ? "Watch-only" : "Paper"}</span><span class="chip">${g.league} · ${dayFmt(s.date, { weekday: "short" })} ${timeFmt(g.start)} PT</span>${s.best.method !== 3 ? `<span class="chip" title="Chosen before the fair-price method started on Nov 7">Old signal-score pick${sd.ev != null && sd.ev < EV_BEST ? "; the fair-price method would pass" : ""}</span>` : ""}</div>
       <div class="pick">${esc(sd.label)}</div>
       <div class="pick-sub">${esc(g.awayName)} at ${esc(g.homeName)} · ${m.type === "spread" ? "Spread" : "Total"} · opened ${m.type === "spread" ? fmtLine(sd.openLine) : sd.openLine}, now ${m.type === "spread" ? fmtLine(sd.line) : sd.line}</div>
     </div>${sd.ev != null ? edgeBadge(sd) : dial(sd.score)}</div>
@@ -440,7 +444,7 @@ function renderBest(s, g) {
     ${note ? `<div class="read"><span class="label">${note.auto ? "Auto read" : "Analyst read"}</span><p>${esc(note.read)}</p>${note.watch ? `<p class="watch">What would change it: ${esc(note.watch)}</p>` : ""}</div>` : ""}
     ${priceBox(sd)}
     ${sd.ev != null && sd.best ? `<div class="fairline"><span>Fair chance <b>${pct(sd.fair, 1)}</b> · best price ${esc(venueTxt(sd.best))} needs <b>${pct(sd.best.breakEven, 1)}</b> · expected return <b>${signed(sd.ev * 100, 1)}%</b> · size <b>${sd.best.kelly ? sd.best.kelly.toFixed(1) + " units" : "none"}</b> <span class="muted">(quarter Kelly, 1 unit = 1% of bankroll)</span></span><span class="timing">${esc(timing(sd))}</span></div>` : ""}
-    <button type="button" class="best-test" data-q="${esc(sideQ(g, m, sd))}">Simulate it or paper trade it →</button>
+    ${o.watch ? "" : `<button type="button" class="best-test" data-q="${esc(sideQ(g, m, sd))}">Simulate it or paper trade it →</button>`}
     ${others.length ? `<div class="radar"><span class="label">Also logged</span>${others.map(p => `<span class="chip">${esc(p.label)} <span class="mono">${p.ev != null ? signed(p.ev * 100, 1) + "%" : p.score}</span></span>`).join("")}</div>` : ""}
   </article>`;
 }
@@ -449,7 +453,7 @@ function renderGame(g, s) {
   const isBest = s.best && s.best.gameId === g.id, c = g.ctx || {}, note = g.note;
   const rec = side => c[side] && c[side].rec ? `<span class="rec">${esc(c[side].rec)}</span>` : "";
   const head = `<div class="g-head"><h3>${esc(g.awayName)}${rec("away")}<span class="at">at</span>${esc(g.homeName)}${rec("home")}</h3>
-    <div class="g-meta"><span class="lg">${g.league}</span><span>${timeFmt(g.start)} PT</span>${g.bets ? `<span>${g.bets.toLocaleString()} bets</span>` : ""}${isBest ? `<span class="chip gold">Best bet</span>` : ""}</div></div>`;
+    <div class="g-meta"><span class="lg">${g.league}</span><span>${timeFmt(g.start)} PT</span>${g.venue && g.venue.neutral ? `<span>Neutral site${g.venue.city ? " · " + esc(g.venue.city) : ""}</span>` : ""}${g.bets ? `<span>${g.bets.toLocaleString()} bets</span>` : ""}${isBest ? `<span class="chip gold">Best bet</span>` : ""}</div></div>`;
   if (!g.hasLines) return `<article class="game">${head}<div class="mkt"><p class="muted" style="font-size:13.5px">No line posted yet.</p></div>${moreBlock(g, note)}</article>`;
   const lean = note && note.lean;
   return `<article class="game${isBest ? " is-best" : ""}">${head}${g.markets.map(m => {
@@ -470,15 +474,23 @@ function renderGame(g, s) {
       }).join("")}</div>`;
   }).join("")}${moreBlock(g, note)}</article>`;
 }
+function venueFacts(g) {
+  const v = g.venue, tr = g.travel, out = [];
+  if (v && (v.neutral || v.intl || v.alt >= 3000)) out.push(`<div class="fact"><span class="label">Venue</span><span>${esc([v.name, v.city].filter(Boolean).join(", "))}${v.alt >= 3000 ? ` · ${v.alt.toLocaleString()} ft` : ""}${v.neutral ? " · neutral site" : ""}${v.intl ? " · international" : ""}</span></div>`);
+  const tz = x => x ? `, ${x > 0 ? "+" : "−"}${Math.abs(x)} time zone${Math.abs(x) === 1 ? "" : "s"}` : "";
+  if (tr && (tr.home || tr.away)) out.push(`<div class="fact"><span class="label">Travel since last game</span><span>${["away", "home"].filter(k => tr[k]).map(k => `${esc(g[k])} ${tr[k].mi.toLocaleString()} mi${tz(tr[k].tz)}`).join(" · ")} <span class="muted">(tracked, not in the fair price yet)</span></span></div>`);
+  return out.join("");
+}
 function moreBlock(g, note) {
   const c = g.ctx;
-  if (!note && !c) return "";
+  if (!note && !c && !venueFacts(g)) return "";
   const side = k => c && c[k] ? c[k] : null;
   const injuries = k => { const t = side(k); if (!t) return "—"; const o = (t.out || []).join(", "), q = (t.q || []).join(", "); return (o ? `<b>Out:</b> ${esc(o)}` : "No one out") + (t.lostPts >= 5 ? `<br><span class="muted">Missing ${t.lostPts.toFixed(1)} points a game</span>` : "") + (q ? `<br><span class="muted">Questionable: ${esc(q)}</span>` : ""); };
   const sp = g.markets.find(m => m.type === "spread"), si = sp ? (sp.sides.find(x => x.key === "home") || {}).situation || {} : {};
   return `<details class="more"><summary>${note && note.lean ? "Read · lean " + esc(leanLabel(g, note.lean)) : note && note.auto ? "Auto read and context" : "Read and context"}</summary><div class="more-body">
     ${note ? `<div class="read"><p>${esc(note.read)}</p>${note.watch ? `<p class="watch">What would change it: ${esc(note.watch)}</p>` : ""}</div>` : ""}
-    ${c ? `<div class="facts">
+    ${!c && venueFacts(g) ? `<div class="facts">${venueFacts(g)}</div>` : ""}
+    ${c ? `<div class="facts">${venueFacts(g)}
       <div class="fact"><span class="label">${esc(g.away)} injuries</span><span>${injuries("away")}</span></div>
       <div class="fact"><span class="label">${esc(g.home)} injuries</span><span>${injuries("home")}</span></div>
       <div class="fact"><span class="label">Rest</span><span>${esc(g.away)} ${si.oppRest ?? "—"} days · ${esc(g.home)} ${si.rest ?? "—"} days</span></div>
@@ -511,6 +523,7 @@ function renderCollege() {
       <div class="tile"><span class="label">Avg CLV</span><span class="v">${S.clv == null ? "—" : signed(S.clv * 100, 1)}</span><span class="d">Points of probability vs the close</span></div>
       <div class="tile"><span class="label">Beat close</span><span class="v">${S.beat == null ? "—" : pct(S.beat)}</span><span class="d">Share of graded picks</span></div>
       <div class="tile"><span class="label">Record</span><span class="v">${graded.length ? `${S.w}-${S.l}${pu ? "-" + pu : ""}` : "—"}</span><span class="d">${graded.length ? signed(S.u, 2) + " units, 1 per pick" : "No results yet"}</span></div>
+      <div class="tile"><span class="label">Best bets</span><span class="v">${(B => B.n ? B.rec : "—")(stats(graded.filter(p => p.isBest)))}</span><span class="d">The daily college pick only</span></div>
     </div>`;
   const dates = Object.keys(C.slates || {}).sort();
   if (!dates.length) return `<div style="display:grid;gap:20px">${head}<div class="note">${C.missing ? "The college slate isn't published yet. It appears after the next hourly refresh." : "No college games in the window right now."}</div></div>`;
@@ -524,6 +537,7 @@ function renderCollege() {
   return `<div style="display:grid;gap:20px">${head}
     <div class="toolbar"><div class="dates" role="group" aria-label="Choose college slate">${dates.map(d => `<button type="button" data-cdate="${d}" aria-pressed="${d === date}">${dayFmt(d, { weekday: "short", month: "short", day: "numeric" })}<small>${(C.slates[d].games || []).filter(g => g.hasLines).length} with lines</small></button>`).join("")}</div></div>
     <div class="fresh"><span>Updated <b>${esc(stampFmt(s.updatedAt))}</b></span><span>Lines: DraftKings</span><span>Prices: Kalshi</span><span>Bets %: ${games.some(g => g.hasTickets) ? "Action Network" : "<b>not posted yet</b>"}</span></div>
+    ${renderBest(s, s.best ? every.find(x => x.id === s.best.gameId) : null, { picks: C.picks, title: "College best bet", watch: true })}
     <section style="display:grid;gap:12px" aria-label="College games">
       <div class="section-head"><h2>The board</h2>
         <div class="filters" role="group" aria-label="Filter college games">${[["all", `All ${games.length}`], ["picks", `Edge 1.5%+ · ${games.filter(edge).length}`]].map(([k, l]) => `<button type="button" data-cfilter="${k}" aria-pressed="${state.cfilter === k}">${l}</button>`).join("")}</div></div>
@@ -534,6 +548,23 @@ function renderCollege() {
       ${log.length ? `<div class="tbl-wrap"><table class="log"><thead><tr><th>Day</th><th>Pick</th><th>Game</th><th class="n">Edge</th><th>Taken</th><th class="n">CLV</th><th>Result</th></tr></thead><tbody>
       ${log.map(p => `<tr><td>${dayFmt(p.date, { month: "short", day: "numeric" })}</td><td>${esc(p.label)}</td><td>${esc(p.matchup)}</td><td class="n">${p.ev != null ? signed(p.ev * 100, 1) + "%" : "—"}</td><td class="mono">${esc(venueTxt(p.price))}</td><td class="n">${p.clvProb == null ? "—" : signed(p.clvProb * 100, 1)}</td><td class="${p.result ? "res-" + p.result : "muted"}">${p.result ? ({ W: "Win", L: "Loss", P: "Push" })[p.result] + (p.finalScore ? ` <span class="muted">${esc(p.finalScore)}</span>` : "") : "Pending"}</td></tr>`).join("")}</tbody></table></div>${picks.length > log.length ? `<p class="fine">Newest ${log.length} of ${picks.length}.</p>` : ""}` : `<p class="muted">No college picks yet. Every side whose best price beats its fair price by 1.5% or more is logged here.</p>`}
     </div></div>`;
+}
+const VAR_NAMES = { ...CONTRIB, alt: "Altitude edge", travel: "Travel miles", tz: "Time zones crossed", altTot: "Altitude (totals)", intl: "International venue (totals)" };
+function renderVariables() {
+  const V = (state.model || {}).variables;
+  if (!V) return "";
+  const tbl = (title, R) => {
+    if (!R) return "";
+    const rows = Object.entries(R.vars || {}).sort((a, b) => (a[1].kind === b[1].kind ? (b[1].help ?? -9) - (a[1].help ?? -9) : a[1].kind === "in use" ? -1 : 1));
+    return `<span class="label">${title} · ${R.rows.toLocaleString()} line moves, tested from ${esc(R.from)}</span>
+      <div class="tbl-wrap"><table class="log"><thead><tr><th>Variable</th><th>Status</th><th class="n">Share of games</th><th class="n">Effect</th></tr></thead><tbody>
+      ${rows.map(([k, v]) => `<tr><td>${esc(VAR_NAMES[k] || k)}</td><td>${v.kind === "shadow" ? "Shadow" : "In use"}</td><td class="n">${v.coverage ? pct(v.coverage) : "—"}</td><td class="n ${v.help > 0.002 ? "pos" : v.help < -0.002 ? "neg" : ""}">${v.help == null ? (v.coverage ? "too few" : "no data yet") : signed(v.help * 100, 1) + "%"}</td></tr>`).join("")}
+      </tbody></table></div>`;
+  };
+  return `<h3 style="font-size:20px">Variable report</h3>
+    <p>Every input is tested each night on the newest quarter of games, which the fit never saw. <b>In use</b>: how much worse the line-move prediction gets without it. <b>Shadow</b>: how much better it would get with it. Shadow variables (altitude, travel since the last game, time zones crossed, international venues) are tracked from November 7 and shown on game cards, but they don't move the fair price yet. When the NBA/NFL test ends on December 5, the ones that help get switched on. At neutral and international sites the team ratings are switched off, because they're built from ordinary home and away games and can't see the venue.</p>
+    ${tbl("NBA and NFL", V.pro)}${V.NCAAB ? tbl("College basketball", V.NCAAB) : ""}
+    <p class="fine">Effect is the change in prediction error on games the fit never saw. Inputs that only appear in a few games show 0 until there's enough data.</p>`;
 }
 function renderCollegeMethod() {
   const M = state.model || {}, c = (M.college || {}).NCAAB, mc = c && c.move && c.move.check, rt = (M.ratings || {}).NCAAB;
@@ -713,6 +744,7 @@ function renderMethod() {
     <h3 style="font-size:20px">Market ratings</h3>
     <p>Every NBA and NFL game this season, with DraftKings' opening and closing lines and the final score, is loaded from ESPN. Team ratings are fit to the closing spreads and totals, with recent games counting more (half-life 30 days in the NBA, 8 weeks in the NFL). They're the market's own season-long view of each team, so a line far from them usually means injury news or an overreaction. The model learns which. They replace the old points-for-and-against rating, which stays on the board for reference.</p>
     ${renderLearned()}
+    ${renderVariables()}
     ${renderCollegeMethod()}
     <h3 style="font-size:20px">The old signal score</h3>
     <p>Before November 7 every side got a score out of 100 from hand-set weights: 70% market signals, 30% situation. Picks needed 50, and the best bet needed 60 with two signals. Those weights were never tested, so the score no longer picks anything. It's kept in the record so the two methods can be compared on the same days.</p>
@@ -1193,29 +1225,29 @@ function renderTestResult(res) {
     }[res.error] || "That one didn't parse.";
     return `<div class="note">${msg}</div>`;
   }
-  const [vcls, vtxt] = verdict(res);
-  const g = res.g, edge = res.price ? res.pEff - res.price.be : null;
+  const m = betModel(res), gr = m ? gradeOf(m.ev) : null;
+  const g = res.g;
   const sub = g ? `${g.league} · ${esc(g.awayName)} at ${esc(g.homeName)} · ${new Date(g.start).toLocaleDateString("en-US", { timeZone: TZ, weekday: "short" })} ${timeFmt(g.start)} PT` : "";
-  const score = res.kind === "prop" ? res.score : res.sd && res.sd.ev == null ? res.sd.score : null;
   const bars = res.kind === "prop"
     ? Object.keys(PSIG).filter(k => k in res.sig).map(k => { const [n, mx] = PSIG[k], v = res.sig[k]; return `<div class="sig"><span class="name">${n}</span><span class="track"><i class="sit" style="width:${(100 * v / mx).toFixed(0)}%"></i></span><span class="pts">${v ? "+" + Math.round(v) : "0"}</span></div>`; }).join("")
     : res.sd ? (res.sd.ev != null ? contribBars(res.sd) : sigBars(res.sd)) : "";
   return `<article class="best test-res" aria-label="Simulation result">
     <div class="best-top"><div>
-      <div class="eyebrow"><span class="tag">Simulated</span><span class="chip">${NSIM.toLocaleString()} games</span>${res.kind === "game" && !res.isPosted && res.sd ? `<span class="chip">Board line ${res.bet.kind === "total" ? res.sd.line : fmtLine(res.sd.line)}</span>` : ""}${score != null ? `<span class="chip gold">Score ${score} / 100</span>` : ""}${res.kind === "game" && res.isPosted && res.sd && res.sd.ev != null ? `<span class="chip gold">Board edge ${signed(res.sd.ev * 100, 1)}%</span>` : ""}</div>
+      <div class="eyebrow"><span class="tag">Simulated</span><span class="chip">${NSIM.toLocaleString()} games</span>${res.kind === "game" && !res.isPosted && res.sd ? `<span class="chip">Board line ${res.bet.kind === "total" ? res.sd.line : fmtLine(res.sd.line)}</span>` : ""}${m ? gradeChip(m.ev) : ""}${addBtn(res.bet.q, res.kind === "game" && res.bet.kind === "total" && g ? `${res.label} (${g.away}–${g.home})` : res.label)}</div>
       <div class="pick" style="font-size:clamp(32px,7vw,48px)">${esc(res.label)}</div>
       <div class="pick-sub">${sub}</div>
     </div></div>
     <div class="sim-top">
       ${dots(res.win, res.push)}
       <div class="sim-num"><span class="big mono">${Math.round(res.win * 100)}</span><span class="of">of 100 simulated games won${res.push >= 0.005 ? `, ${Math.round(res.push * 100)} pushed` : ""}</span>
-        <span class="verdict ${vcls}">${esc(vtxt)}</span>
-        ${res.price ? `<span class="muted" style="font-size:13.5px">${esc(res.price.label)} needs ${pct(res.price.be, 1)} to break even. The model says ${pct(res.pEff, 1)}${res.push >= 0.005 ? " once pushes are set aside" : ""}, ${edge >= 0 ? "an edge of " : "short by "}<b class="mono">${Math.abs(edge * 100).toFixed(1)}</b> points.${res.price.thin ? " Kalshi's quote here is wide, so treat the price loosely." : ""}</span>` : `<span class="muted" style="font-size:13.5px">No market price for this exact line. Add one, like "at +150" or "at 20c", to check value.</span>`}
+        <span class="verdict ${gr ? gr.cls : ""}">${gr ? `${gr.word} · edge ${signed(m.ev * 100, 1)}%` : "No price to grade against"}</span>
+        ${m ? `<span class="muted" style="font-size:13.5px">${esc(m.priceTxt)} needs ${pct(m.need, 1)} to break even. The model says ${pct(m.p, 1)}${m.mkt != null ? ` (his game logs ${pct(res.pEff, 1)}, Kalshi ${pct(m.mkt, 1)}, blended 35/65)` : ""}${res.push >= 0.005 ? " once pushes are set aside" : ""}.${res.price.thin ? " Kalshi's quote here is wide, so treat the price loosely." : ""}</span>` : ""}
+        <p class="advice">${esc(adviceSingle(res, m))}</p>
       </div>
     </div>
     ${hist(res)}
     <div class="case">
-      ${bars ? `<div class="sig-list"><span class="label">${res.kind === "prop" ? `Prop score · ${score}` : res.sd && res.sd.ev != null ? `Fair price at the board line · books ${pct(res.sd.fairNow, 1)} → fair ${pct(res.sd.fair, 1)} (points)` : `${res.isPosted ? "Board score for this side" : "Board score at the posted line"} · ${score}`}</span>${bars}</div>` : ""}
+      ${bars ? `<div class="sig-list"><span class="label">${res.kind === "prop" ? "What the simulation sees" : res.sd && res.sd.ev != null ? `Fair price at the board line · books ${pct(res.sd.fairNow, 1)} → fair ${pct(res.sd.fair, 1)} (points)` : res.isPosted ? "Old signal score for this side" : "Old signal score at the posted line"}</span>${bars}</div>` : ""}
       <div class="why"><span class="label">How it was built</span><ul>${res.notes.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>
     </div>
     ${recordForm("result")}
@@ -1254,13 +1286,14 @@ function renderTest() {
     setTimeout(() => { try { computeBoard(); } catch (e) { state.board = { dis: [], reco: null }; } state.boardBusy = false; if (state.view === "test") { const q = $("#q"), v = q && q.value, f = q && document.activeElement === q; render(); if (f && $("#q")) { $("#q").value = v; $("#q").focus(); } } }, 30);
   }
   return `<div style="display:grid;gap:18px;grid-template-columns:minmax(0,1fr)">
-    <div class="section-head"><h2>Test a bet</h2><span class="muted" style="font-size:13px">Any side, total, player prop or parlay (join legs with +) · ${NSIM.toLocaleString()} simulated games each</span></div>
+    <div class="section-head"><h2>Test a bet</h2><span class="muted" style="font-size:13px">Any side, total, player prop or parlay (press + Parlay on any result, or join legs with +) · ${NSIM.toLocaleString()} simulated games each</span></div>
     <form id="ask" class="ask" autocomplete="off">
       <label for="q" class="label">Ask in plain English</label>
       <div class="ask-row"><input id="q" name="q" type="text" inputmode="text" placeholder="Luka 45+ points · Lakers -3.5 · Luka 30+ points + Lakers -3.5" value="${esc(state.q)}"><button type="submit">Simulate</button></div>
       <div class="ask-ex">${loading ? `<span class="muted" style="font-size:12.5px">Loading player data…</span>` : examples().map(x => `<button type="button" class="chip" data-q="${esc(x)}">${esc(x)}</button>`).join("")}</div>
       ${state.propsErr ? `<p class="fine">Player props aren't available yet (${esc(state.propsErr)}). Game sides and totals still work.</p>` : ""}
     </form>
+    ${renderSlip()}
     ${renderTestResult(state.result)}
     ${state.board ? (state.board.reco ? renderParlay(state.board.reco, true) : `<div class="note">Not enough priced legs on the board for a parlay right now.</div>`) : ""}
     ${state.props ? renderDisagree() : ""}
@@ -1272,6 +1305,87 @@ async function runQuery(q) {
   state.result = q.trim() ? answer(q) : null;
   history.replaceState(null, "", "#test?q=" + encodeURIComponent(q));
   render();
+}
+
+/* ---------- one grade for every bet: expected return at the price, on the board's scale ---------- */
+const GRADES = [[0.04, "good", "Strong"], [EV_BEST, "good", "Bet"], [EV_PICK, "", "Lean"], [0, "bad", "Thin"], [-Infinity, "bad", "Pass"]];
+const gradeOf = ev => { if (ev == null || !isFinite(ev)) return null; const g = GRADES.find(x => ev >= x[0]); return { cls: g[1], word: g[2], ev }; };
+const gradeChip = ev => { const g = gradeOf(ev); return g ? `<span class="chip ${g.cls === "good" ? "gold" : ""}" title="Expected return at this price. Bet 2.5%+, Lean 1.5%+, the same bars as the board">Edge ${signed(ev * 100, 1)}% · ${g.word}</span>` : ""; };
+const oddsTxt = be => { const a = amDec(1 / be); return (a > 0 ? "+" : "") + a; };
+// the model's chance for a single bet: game lines are already centred on the fair price; a prop's game-log simulation is
+// blended with Kalshi's price (35% sim, 65% market), the same blend the recommended parlay uses
+// a game line's chance straight from the fair-price bell curve (the same number for a single and for a parlay leg)
+function gameChance(b) {
+  if (!b || !b.g || !["spread", "total", "ml"].includes(b.kind)) return null;
+  const gm = gameModel(b.g), lg = b.g.league;
+  if (b.kind === "total") return gm.muT == null ? null : (b.dir === "over" ? Phi((gm.muT - b.line) / SD_T[lg]) : 1 - Phi((gm.muT - b.line) / SD_T[lg]));
+  if (gm.mu == null) return null;
+  const mine = b.side === "home" ? gm.mu : -gm.mu;
+  return Phi((mine + (b.kind === "ml" ? 0 : b.line)) / SD_M[lg]);
+}
+function betModel(res) {
+  if (!res || res.error || !res.price) return null;
+  const mkt = res.kind === "prop" ? res.price.mkt : null, gc = res.kind === "game" ? gameChance(res.bet) : null;
+  const p = mkt != null ? W_SIM * res.pEff + (1 - W_SIM) * mkt : gc != null ? gc : res.pEff;
+  return { p, need: res.price.be, ev: p / res.price.be - 1, priceTxt: res.price.label, mkt, simOnly: res.kind === "prop" && mkt == null };
+}
+function sizeTxt(p, need) {
+  const d = 1 / need, f = (p * d - 1) / (d - 1), u = Math.min(3, Math.max(0, 0.25 * f * 100));
+  return u >= 0.1 ? `about ${u.toFixed(1)} unit${u >= 0.95 && u < 1.05 ? "" : "s"} (quarter Kelly)` : "";
+}
+function adviceSingle(res, m) {
+  if (!m) return res.kind === "prop" ? "No Kalshi price at this line. Add the odds you can get (\"... at +120\") and the sheet will grade it." : "No price at this exact line. Add one (\"... at -105\") to grade it.";
+  const g = gradeOf(m.ev), target = oddsTxt(m.p / (1 + EV_BEST)), sz = sizeTxt(m.p, m.need), sd = res.sd;
+  let t;
+  if (m.ev >= EV_BEST) t = `${g.word}. ${pct(m.p, 1)} to win against ${pct(m.need, 1)} needed at ${m.priceTxt}${sz ? `: ${sz}` : ""}.`;
+  else if (m.ev >= EV_PICK) t = `Lean, keep it small. ${pct(m.p, 1)} against ${pct(m.need, 1)} needed clears the 1.5% logging bar but not the 2.5% the sheet wants for a bet; ${target} or better makes it one.`;
+  else if (m.ev >= 0) t = `Thin. ${pct(m.p, 1)} against ${pct(m.need, 1)} needed is too close to bet. It becomes a bet at ${target} or better.`;
+  else t = `Pass. ${pct(m.p, 1)} against ${pct(m.need, 1)} needed at ${m.priceTxt}. Only worth it at ${target} or better.`;
+  if (res.kind === "game" && res.isPosted && sd && m.ev >= EV_PICK) t += (sd.expMove || 0) >= 0.004 ? " The line is expected to move toward this side, so today's price is likely the best." : (sd.expMove || 0) <= -0.004 ? " The line may drift your way; no rush." : "";
+  if (res.kind === "game" && res.g && res.g.ratingOff) t += " Neutral site: team ratings are switched off for this game.";
+  if (m.simOnly) t += " This is his game logs only (no market price to check against), so size down.";
+  if (m.mkt != null && Math.abs(res.pEff - m.mkt) > FAR_GAP) t += ` His game logs and Kalshi are ${Math.round(Math.abs(res.pEff - m.mkt) * 100)} points apart, which usually means news the logs can't see. Check injuries and minutes first.`;
+  return t;
+}
+// a parlay graded the same way: prop legs shrunk toward Kalshi like singles, keeping the simulated correlation
+function parlayModel(r) {
+  if (!r || !r.legs || !r.dec) return null;
+  let p = r.pEff, legs = r.legs.map(l => {
+    const mkt = l.price && l.price.mkt != null ? l.price.mkt : null, gc = !r.reco && l.b && l.b.kind !== "prop" ? gameChance(l.b) : null;
+    const pb = mkt != null && l.b && l.b.kind === "prop" ? W_SIM * l.p + (1 - W_SIM) * mkt : gc != null ? gc : l.p;
+    return { ...l, pb, ev: l.price ? pb / l.price.be - 1 : null };
+  });
+  if (!r.reco) legs.forEach(l => { if (l.p > 0 && l.pb !== l.p) p *= l.pb / l.p; });
+  p = Math.min(0.999, Math.max(0, p));
+  return { p, need: 1 / r.dec, ev: p * r.dec - 1, legs };
+}
+function adviceParlay(r, m) {
+  if (!m) return "Add a price for every leg (or one for the whole parlay, \"... at +600\") and the sheet will grade it.";
+  const best = m.legs.filter(l => l.ev != null).sort((a, b) => b.ev - a.ev)[0];
+  let t = m.ev >= EV_BEST ? `Playable as a small parlay: ${pct(m.p, 1)} to hit against ${pct(m.need, 1)} needed. Parlays swing hard, so keep it to a quarter of a normal stake.`
+    : `Pass as a parlay: ${pct(m.p, 1)} to hit against ${pct(m.need, 1)} needed, ${signed(m.ev * 100, 1)}% per bet.`;
+  if (m.ev < EV_BEST) t += best && best.ev >= EV_PICK ? ` The leg with an edge is ${best.label} (${signed(best.ev * 100, 1)}%); take it on its own.` : " No leg has an edge on its own, so the parlay only stacks the books' cut.";
+  if (r.sameGame && r.indep && r.win > r.indep * 1.05) t += ` These legs tend to win together (${pct(r.win)} against ${pct(r.indep)} if unrelated); books price same-game parlays for that, so the real price is usually worse than this one.`;
+  return t;
+}
+/* ---------- parlay slip (kept in this browser) ---------- */
+const SLIP_KEY = "sms.slip";
+function loadSlip() { try { const a = JSON.parse(localStorage.getItem(SLIP_KEY) || "[]"); return Array.isArray(a) ? a.slice(0, 6) : []; } catch (e) { return []; } }
+function saveSlip() { try { localStorage.setItem(SLIP_KEY, JSON.stringify(state.slip)); } catch (e) { /* private mode: the slip lasts this visit */ } }
+function addLeg(q, label) {
+  if (state.slip.some(l => l.q === q)) state.slipMsg = "That leg is already in the slip.";
+  else if (state.slip.length >= 6) state.slipMsg = "A parlay holds six legs at most.";
+  else { state.slip.push({ q, label: label || q }); saveSlip(); state.slipMsg = null; }
+}
+const addBtn = (q, label) => `<button type="button" class="chip addleg" data-addleg="${esc(q)}" data-label="${esc(label || q)}">+ Parlay</button>`;
+function renderSlip() {
+  const L = state.slip;
+  if (!L.length) return "";
+  const q = L.map(l => l.q).join(" + ");
+  return `<section class="card slip" aria-label="Parlay slip"><div class="section-head"><h3>Parlay slip · ${L.length} leg${L.length === 1 ? "" : "s"}</h3><button type="button" class="chip" data-slip="clear">Clear</button></div>
+    <ol class="legs">${L.map((l, i) => `<li><span>${esc(l.label)}</span><button type="button" class="chip" data-slip="rm" data-i="${i}" aria-label="Remove ${esc(l.label)}">Remove</button></li>`).join("")}</ol>
+    ${L.length >= 2 ? `<button type="button" class="best-test" data-q="${esc(q)}">Simulate this ${L.length}-leg parlay →</button>` : `<p class="muted" style="font-size:13.5px">Add at least one more leg from a test result or the tables below.</p>`}
+    ${state.slipMsg ? `<p class="fine">${esc(state.slipMsg)}</p>` : ""}</section>`;
 }
 
 /* ---------- parlays, the recommended parlay and model-vs-books ---------- */
@@ -1434,18 +1548,20 @@ function recordForm(kind) {
     ${state.savedMsg && state.savedMsg.kind === kind ? `<span class="saved">${esc(state.savedMsg.text)} <a href="#trades">My trades</a></span>` : ""}</form>`;
 }
 function renderParlay(r, reco) {
-  const evTxt = r.ev == null ? "Add a price for every leg, or one for the whole parlay (\"... at +600\"), to see the expected return."
-    : `Pays ${odds(r.amer)} (needs ${pct(1 / r.dec, 1)} to win). Expected return: <b class="mono ${r.ev >= 0 ? "pos" : "neg"}">${r.ev >= 0 ? "+" : "−"}$${Math.abs(r.ev * 100).toFixed(2)}</b> per $100 staked.`;
-  const vtxt = r.ev == null ? "" : r.ev >= 0 ? "Positive on paper" : reco ? "Best available today, and still a losing bet on paper" : "Losing bet on paper";
+  const pm = parlayModel(r), gr = pm ? gradeOf(pm.ev) : null;
+  const evTxt = !pm ? "" : `Pays ${odds(r.amer)} (needs ${pct(pm.need, 1)} to win). The model gives it ${pct(pm.p, 1)}: <b class="mono ${pm.ev >= 0 ? "pos" : "neg"}">${pm.ev >= 0 ? "+" : "−"}$${Math.abs(pm.ev * 100).toFixed(2)}</b> per $100 staked.`;
+  const vtxt = gr ? `${gr.word} · edge ${signed(pm.ev * 100, 1)}%` : "";
+  const legsM = pm ? pm.legs : r.legs.map(l => ({ ...l, pb: l.p, ev: null }));
   return `<article class="best test-res parlay" aria-label="${reco ? "Recommended parlay" : "Parlay simulation"}">
-    <div class="eyebrow"><span class="tag">${reco ? "Recommended parlay" : "Simulated parlay"}</span><span class="chip">${reco ? "Sim blended with market" : NSIM.toLocaleString() + " games"}</span>${r.sameGame ? `<span class="chip gold">Same-game legs move together</span>` : ""}</div>
+    <div class="eyebrow"><span class="tag">${reco ? "Recommended parlay" : "Simulated parlay"}</span><span class="chip">${reco ? "Sim blended with market" : NSIM.toLocaleString() + " games"}</span>${pm ? gradeChip(pm.ev) : ""}${r.sameGame ? `<span class="chip gold">Same-game legs move together</span>` : ""}</div>
     <div class="pick" style="font-size:clamp(30px,6vw,44px)">${esc(r.label)}</div>
-    <ol class="legs">${r.legs.map(l => `<li><span>${esc(l.label)}</span><span class="mono muted">${pct(l.p)} alone${l.price ? " · " + esc(l.price.label) : ""}</span>${reco ? ` <button type="button" class="chip" data-q="${esc(l.b.q)}">Test</button>` : ""}</li>`).join("")}</ol>${reco ? `<button type="button" class="best-test" data-q="${esc(r.q)}">Run the raw simulation on it (no market blend) →</button>` : ""}
+    <ol class="legs">${legsM.map(l => `<li><span>${esc(l.label)}</span><span class="mono muted">${pct(l.pb)}${l.price ? ` vs ${pct(l.price.be)} at ${esc(l.price.label)}` : ""}${l.ev != null ? ` · edge ${signed(l.ev * 100, 1)}%` : ""}</span>${reco ? ` <button type="button" class="chip" data-q="${esc(l.b.q)}">Test</button>${addBtn(l.b.q, l.label)}` : ""}</li>`).join("")}</ol>${reco ? `<button type="button" class="best-test" data-q="${esc(r.q)}">Run the raw simulation on it (no market blend) →</button>` : ""}
     <div class="sim-top">${dots(r.win, r.push)}
       <div class="sim-num"><span class="big mono">${Math.round(r.win * 100)}</span><span class="of">of 100 ${reco ? "expected to win" : "simulated slates won"}${r.push >= 0.005 ? `, ${Math.round(r.push * 100)} pushed` : ""}</span>
-        ${vtxt ? `<span class="verdict ${r.ev >= 0 ? "good" : "bad"}">${esc(vtxt)}</span>` : ""}
-        <span class="muted" style="font-size:13.5px">${evTxt}</span>
-        ${reco ? `<span class="muted" style="font-size:12.5px">Each leg's chance blends the simulation with the market price (35% sim, 65% market for props) because the market is usually better informed than a game-log model.</span>` : `<span class="muted" style="font-size:12.5px">If the legs had nothing to do with each other: ${(r.indep * 100).toFixed(1)} of 100.</span>`}
+        ${vtxt ? `<span class="verdict ${gr.cls}">${esc(vtxt)}</span>` : ""}
+        ${evTxt ? `<span class="muted" style="font-size:13.5px">${evTxt}</span>` : ""}
+        <p class="advice">${esc(adviceParlay(r, pm))}</p>
+        ${reco ? `<span class="muted" style="font-size:12.5px">Each leg's chance blends the simulation with the market price (35% sim, 65% market for props) because the market is usually better informed than a game-log model.</span>` : `<span class="muted" style="font-size:12.5px">Raw simulation ${(r.win * 100).toFixed(1)} of 100; ${(r.indep * 100).toFixed(1)} if the legs had nothing to do with each other. Graded like singles: game legs at the fair price, prop legs shrunk toward Kalshi, keeping how the legs move together.</span>`}
       </div></div>
     ${recordForm(reco ? "reco" : "result")}
     <p class="fine">${r.userPrice ? "" : "Priced leg by leg (DraftKings for game lines, Kalshi for props); a sportsbook's own parlay price is usually worse, especially for same-game parlays. "}Every added leg multiplies the house's cut, which is why parlays lose more often than singles.</p>
@@ -1455,7 +1571,7 @@ function renderDisagree() {
   const B = state.board;
   if (!B) return `<div class="note">Comparing the simulation with the books…</div>`;
   const table = (rows, mk) => rows.length ? `<div class="tbl-wrap"><table class="log"><thead><tr><th>Bet</th><th class="n">Sim</th><th class="n">${mk}</th><th class="n">Gap</th><th>Price</th><th></th></tr></thead><tbody>
-    ${rows.map(d => `<tr><td>${esc(d.label)}</td><td class="n">${pct(d.p)}</td><td class="n">${pct(d.mkt)}</td><td class="n pos">${signed(d.diff * 100, 1)}${d.diff > FAR_GAP ? ` <span class="chip news" title="A gap this big usually means the sim is missing news">check news</span>` : ""}</td><td class="mono">${esc(d.price)}</td><td><button type="button" class="chip" data-q="${esc(d.q)}">Test</button></td></tr>`).join("")}
+    ${rows.map(d => `<tr><td>${esc(d.label)}</td><td class="n">${pct(d.p)}</td><td class="n">${pct(d.mkt)}</td><td class="n pos">${signed(d.diff * 100, 1)}${d.diff > FAR_GAP ? ` <span class="chip news" title="A gap this big usually means the sim is missing news">check news</span>` : ""}</td><td class="mono">${esc(d.price)}</td><td><button type="button" class="chip" data-q="${esc(d.q)}">Test</button> ${addBtn(d.q, d.label)}</td></tr>`).join("")}
     </tbody></table></div>` : `<p class="muted" style="font-size:13.5px">Nothing on the board right now.</p>`;
   return `<section class="card" aria-label="Where the simulation and the books disagree"><div class="section-head"><h3>Where the sim and the books disagree</h3><span class="muted" style="font-size:12.5px">Sides the sim likes more than the market, largest gap first</span></div>
     <span class="label">Game lines vs the sportsbooks' consensus</span>${table(B.disGames, "Books")}
@@ -1611,6 +1727,9 @@ async function importTrades(file) {
 /* ---------- events + data ---------- */
 document.querySelector(".views").addEventListener("click", e => { const b = e.target.closest("button[data-view]"); if (b) setView(b.dataset.view); });
 $("#main").addEventListener("click", e => {
+  const al = e.target.closest("button[data-addleg]"); if (al) { addLeg(al.dataset.addleg, al.dataset.label); render(); return; }
+  const sl = e.target.closest("button[data-slip]");
+  if (sl) { if (sl.dataset.slip === "clear") state.slip = []; else state.slip.splice(+sl.dataset.i, 1); state.slipMsg = null; saveSlip(); render(); return; }
   const ex = e.target.closest("button[data-q]"); if (ex) { if (state.view !== "test") setView("test"); runQuery(ex.dataset.q); window.scrollTo({ top: 0 }); return; }
   const act = e.target.closest("button[data-act]");
   if (act) {
@@ -1686,6 +1805,7 @@ document.addEventListener("visibilitychange", async () => {
 });
 (async function start() {
   const v = location.hash.slice(1).split("?")[0], hq = new URLSearchParams(location.hash.split("?")[1] || "").get("q");
+  state.slip = loadSlip();
   setView(["slate", "college", "test", "trades", "record", "method"].includes(v) ? v : "slate");
   await loadData();
   render();
