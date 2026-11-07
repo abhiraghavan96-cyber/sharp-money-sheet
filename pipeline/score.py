@@ -445,6 +445,104 @@ def rating_line(model, g):
     return margin, total
 
 
+# ---------- venue and travel (shadow variables: tracked and shown, kept out of the fair price until they prove out) ----------
+# Team ratings come from ordinary home and away games, so at a neutral or international site (Mexico City, London,
+# Las Vegas) they can't see what the venue does and the market can: NBA/NFL ratings are switched off there.
+SHADOW_FEATS = ["alt", "travel", "tz", "altTot", "intl"]
+SHADOW_NAMES = {"alt": "Altitude edge", "travel": "Travel miles", "tz": "Time zones crossed", "altTot": "Altitude (totals)", "intl": "International venue (totals)"}
+# arena locations (lat, lon, standard UTC offset) for travel; altitude in feet for the high-altitude homes
+TEAM_LOC = {
+    "NBA": {"ATL": (33.76, -84.40, -5), "BOS": (42.37, -71.06, -5), "BKN": (40.68, -73.98, -5), "CHA": (35.23, -80.84, -5), "CHI": (41.88, -87.67, -6),
+            "CLE": (41.50, -81.69, -5), "DAL": (32.79, -96.81, -6), "DEN": (39.75, -105.01, -7), "DET": (42.34, -83.06, -5), "GS": (37.77, -122.39, -8),
+            "HOU": (29.75, -95.36, -6), "IND": (39.76, -86.16, -5), "LAC": (33.95, -118.34, -8), "LAL": (34.04, -118.27, -8), "MEM": (35.14, -90.05, -6),
+            "MIA": (25.78, -80.19, -5), "MIL": (43.05, -87.92, -6), "MIN": (44.98, -93.28, -6), "NO": (29.95, -90.08, -6), "NY": (40.75, -73.99, -5),
+            "OKC": (35.46, -97.52, -6), "ORL": (28.54, -81.38, -5), "PHI": (39.90, -75.17, -5), "PHX": (33.45, -112.07, -7), "POR": (45.53, -122.67, -8),
+            "SAC": (38.58, -121.50, -8), "SA": (29.43, -98.44, -6), "TOR": (43.64, -79.38, -5), "UTAH": (40.77, -111.90, -7), "WSH": (38.90, -77.02, -5)},
+    "NFL": {"ARI": (33.53, -112.26, -7), "ATL": (33.76, -84.40, -5), "BAL": (39.28, -76.62, -5), "BUF": (42.77, -78.79, -5), "CAR": (35.23, -80.85, -5),
+            "CHI": (41.86, -87.62, -6), "CIN": (39.10, -84.52, -5), "CLE": (41.51, -81.70, -5), "DAL": (32.75, -97.09, -6), "DEN": (39.74, -105.02, -7),
+            "DET": (42.34, -83.05, -5), "GB": (44.50, -88.06, -6), "HOU": (29.68, -95.41, -6), "IND": (39.76, -86.16, -5), "JAX": (30.32, -81.64, -5),
+            "KC": (39.05, -94.48, -6), "LV": (36.09, -115.18, -8), "LAC": (33.95, -118.34, -8), "LAR": (33.95, -118.34, -8), "MIA": (25.96, -80.24, -5),
+            "MIN": (44.97, -93.26, -6), "NE": (42.09, -71.26, -5), "NO": (29.95, -90.08, -6), "NYG": (40.81, -74.07, -5), "NYJ": (40.81, -74.07, -5),
+            "PHI": (39.90, -75.17, -5), "PIT": (40.45, -80.02, -5), "SF": (37.40, -121.97, -8), "SEA": (47.60, -122.33, -8), "TB": (27.98, -82.50, -5),
+            "TEN": (36.17, -86.77, -6), "WSH": (38.91, -76.86, -5)}}
+TEAM_ALT = {("NBA", "DEN"): 5280, ("NFL", "DEN"): 5280, ("NBA", "UTAH"): 4226}
+# neutral and international venue cities: (lat, lon, standard UTC offset, altitude ft)
+VENUE_CITY = {"Mexico City": (19.43, -99.13, -6, 7350), "London": (51.51, -0.13, 0, 35), "Paris": (48.86, 2.35, 1, 115),
+              "Berlin": (52.52, 13.40, 1, 110), "Munich": (48.14, 11.58, 1, 1700), "Frankfurt": (50.11, 8.68, 1, 370),
+              "Madrid": (40.42, -3.70, 1, 2180), "Sao Paulo": (-23.55, -46.63, -3, 2500), "São Paulo": (-23.55, -46.63, -3, 2500),
+              "Rio de Janeiro": (-22.91, -43.17, -3, 30), "Dublin": (53.35, -6.26, 0, 30), "Melbourne": (-37.81, 144.96, 10, 100),
+              "Abu Dhabi": (24.45, 54.38, 4, 15), "Las Vegas": (36.17, -115.14, -8, 2000), "Paradise": (36.09, -115.18, -8, 2000),
+              "Denver": (39.74, -104.99, -7, 5280), "Salt Lake City": (40.76, -111.89, -7, 4226)}
+INTL_CITIES = {"Mexico City", "London", "Paris", "Berlin", "Munich", "Frankfurt", "Madrid", "Sao Paulo", "São Paulo", "Rio de Janeiro",
+               "Dublin", "Melbourne", "Abu Dhabi"}
+# college venues at altitude (feet)
+CITY_ALT = {"Laramie": 7220, "USAF Academy": 7258, "Air Force Academy": 7258, "Colorado Springs": 6035, "Flagstaff": 6910, "Cedar City": 5846,
+            "Boulder": 5328, "Albuquerque": 5312, "Denver": 5280, "Fort Collins": 5003, "Bozeman": 4820, "Greeley": 4675, "Provo": 4551,
+            "Logan": 4535, "Reno": 4505, "Pocatello": 4462, "Ogden": 4300, "Salt Lake City": 4226, "Las Cruces": 3900, "El Paso": 3740,
+            "Lubbock": 3256, "Missoula": 3209, "Mexico City": 7350}
+
+
+def _miles(a, b):
+    la1, lo1, la2, lo2 = (math.radians(v) for v in (a[0], a[1], b[0], b[1]))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 3959 * 2 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def venue_info(g):
+    """Where the game is played: city, altitude, neutral, international."""
+    v = g.get("venue") or {}
+    city, lg = v.get("city") or "", g["league"]
+    vc = VENUE_CITY.get(city)
+    alt = vc[3] if vc else CITY_ALT.get(city, 0)
+    if not g.get("neutral"):
+        alt = max(alt, TEAM_ALT.get((lg, g["home"]), 0))
+    intl = city in INTL_CITIES or (v.get("country") not in (None, "", "USA", "US", "United States", "Canada", "CAN"))
+    return {"name": v.get("name"), "city": city or None, "alt": alt, "neutral": bool(g.get("neutral")), "intl": bool(intl)}
+
+
+def travel_info(g, vi):
+    """Each team's trip since its last game (miles, time zones; positive = travelled east). NBA/NFL only."""
+    lg, ctx = g["league"], g.get("ctx") or {}
+    locs = TEAM_LOC.get(lg)
+    if not locs:
+        return None
+    here = VENUE_CITY.get(vi["city"] or "") if vi["neutral"] else None
+    here = (here[0], here[1], here[2]) if here else locs.get(g["home"])
+    if not here:
+        return None
+    out = {}
+    for side in ("home", "away"):
+        t = ctx.get(side) or {}
+        if not t.get("last"):
+            continue
+        base = locs.get(t.get("lastOpp")) if t.get("lastAtVs") == "@" else locs.get(g[side])
+        if not base:
+            continue
+        out[side] = {"mi": round(_miles(base, here)), "tz": here[2] - base[2]}
+    return out or None
+
+
+def shadow_features(g, mt, vi, tr):
+    """The shadow variables for the home side (spreads) or the over (totals)."""
+    lg, x = g["league"], {}
+    if mt == "spread":
+        if vi["alt"] >= 3000:   # who is used to thin air: each team's home altitude, capped at the venue's
+            if vi["neutral"]:
+                ha, aa = TEAM_ALT.get((lg, g["home"]), 0), TEAM_ALT.get((lg, g["away"]), 0)
+            else:
+                ha, aa = vi["alt"], TEAM_ALT.get((lg, g["away"]), 0)
+            x["alt"] = (min(ha, vi["alt"]) - min(aa, vi["alt"])) / 1000
+        if tr and tr.get("home") and tr.get("away"):
+            x["travel"] = (tr["away"]["mi"] - tr["home"]["mi"]) / 1000
+            x["tz"] = float(abs(tr["away"]["tz"]) - abs(tr["home"]["tz"]))
+    else:
+        if vi["alt"] >= 3000:
+            x["altTot"] = vi["alt"] / 1000
+        if vi["intl"]:
+            x["intl"] = 1.0
+    return x
+
+
 def market_features(g, m, now, model):
     """Everything the two learned models look at, for the home side (spreads) or the over (totals)."""
     lg, mt = g["league"], m["type"]
@@ -467,7 +565,8 @@ def market_features(g, m, now, model):
         x["espn"] = clip(cov(si["modelMargin"]) - p0, 0.10)
     rl = rating_line(model, g)
     rp = None
-    if rl and (mt == "spread" or rl[1] is not None):
+    rating_off = bool(g.get("neutral")) and lg not in COLLEGE   # ratings can't see a neutral or international venue
+    if rl and (mt == "spread" or rl[1] is not None) and not rating_off:
         rp = cov(rl[0] if mt == "spread" else rl[1])
         x["rating"] = clip(rp - p0)
     if s.get("tickets") is not None:
@@ -483,9 +582,11 @@ def market_features(g, m, now, model):
     else:
         x["wind"] = -so.get("weather", 0) / 10
         x["over"] = 1.0
+    vi = venue_info(g)
+    x.update(shadow_features(g, mt, vi, travel_info(g, vi)))   # shadow: in the snapshot and the history, not in the fair price
     hours = (datetime.strptime(g["start"], "%Y-%m-%dT%H:%M:%SZ") - datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ")).total_seconds() / 3600
     return {"L": L, "p": round(p0, 4), "h": round(hours, 2), "x": {k: round(v, 4) for k, v in x.items() if v},
-            "ratingProb": None if rp is None else round(rp, 4), "ratingLine": rl}
+            "ratingProb": None if rp is None else round(rp, 4), "ratingLine": rl, "ratingOff": rating_off and bool(rl)}
 
 
 def model_active(part):
@@ -515,15 +616,18 @@ def fair_eval(feat, model):
     return {"fair": round(clamp(feat["p"] + adj, 0.02, 0.98), 4), "move": round(move, 4), "tilt": round(tilt, 4), "contrib": contrib, "tau": round(tau, 2)}
 
 
-def best_price(sd, fair):
-    """Cheapest way to take this side right now: DraftKings, the best of the eight books, or Kalshi at an exact strike."""
+def best_price(sd, fair, lg=None):
+    """Cheapest way to take this side right now: DraftKings, the best of the eight books, or Kalshi at an exact strike.
+    College Kalshi markets are thin, so a college Kalshi quote far better than the books' consensus is treated like a
+    stale book price and skipped."""
     opts = [{"venue": "DraftKings", "odds": sd["odds"], "breakEven": sd["dkBreakEven"]}]
     bb = (sd.get("consensus") or {}).get("best")
     if bb and bb["book"] != "DraftKings":
         be = imp(bb["odds"])
         if be >= (sd["consensus"]["prob"] - SUSPECT_GAP):
             opts.append({"venue": bb["book"], "odds": bb["odds"], "breakEven": round(be, 4)})
-    if sd.get("kalshiExact") and sd.get("kalshiBreakEven") is not None:
+    stale_k = lg in COLLEGE and sd.get("consensus") and sd.get("kalshiBreakEven") is not None and sd["kalshiBreakEven"] < sd["consensus"]["prob"] - SUSPECT_GAP
+    if sd.get("kalshiExact") and sd.get("kalshiBreakEven") is not None and not stale_k:
         opts.append({"venue": "Kalshi", "cents": round(sd["kalshiCost"] * 100, 1), "breakEven": sd["kalshiBreakEven"]})
     best = min(opts, key=lambda o: o["breakEven"])
     ev = fair / best["breakEven"] - 1
@@ -612,7 +716,7 @@ def build(raw, prev=None, model=None, snaps=None):
             continue  # finished before this run and never tracked: leave it out
         mk = [m for m in (market_eval(g, "spread"), market_eval(g, "total")) if m]
         probs = model_probs(g, next((m for m in mk if m["type"] == "spread"), None), next((m for m in mk if m["type"] == "total"), None))
-        rl = None
+        rl, rating_off = None, False
         mdl = model_for(model, g["league"])
         for m in mk:
             pr = probs.get(m["type"])
@@ -627,11 +731,14 @@ def build(raw, prev=None, model=None, snaps=None):
                 sd["fairNow"] = ft["p"] if sg == 1 else round(1 - ft["p"], 4)
                 sd["expMove"], sd["tilt"] = round(sg * fe["move"], 4), round(sg * fe["tilt"], 4)
                 sd["contrib"] = {k: round(sg * v, 4) for k, v in fe["contrib"].items()}
-                sd["best"] = best_price(sd, sd["fair"])
+                sd["best"] = best_price(sd, sd["fair"], g["league"])
                 sd["ev"] = sd["best"]["ev"]
             m["inputs"] = {"x": ft["x"], "hours": ft["h"], "tau": fe["tau"]}
             if pr:
                 pr.update({"rating": ft["ratingProb"], "fair": fe["fair"], "rest": ft["x"].get("rest"), "health": ft["x"].get("health"), "wind": ft["x"].get("wind")})
+                pr.update({k: ft["x"].get(k) for k in SHADOW_FEATS})
+            if ft.get("ratingOff"):
+                rating_off = True
             if g["start"] > now:   # keep the first snapshot in each time window for the move model
                 sk = f"{m['type']}|{snap_bucket(ft['h'])}"
                 if sk not in (snaps.get(g["id"]) or {}):
@@ -639,6 +746,9 @@ def build(raw, prev=None, model=None, snaps=None):
         game = {k: g[k] for k in ("league", "id", "start", "away", "awayName", "home", "homeName")}
         game["neutral"] = bool(g.get("neutral"))
         game["ratingLine"] = None if not rl else {"margin": round(rl[0], 1), "total": None if rl[1] is None else round(rl[1], 1)}
+        game["ratingOff"] = rating_off
+        game["venue"] = venue_info(g)
+        game["travel"] = travel_info(g, game["venue"])
         game["probs"] = probs
         game["asOf"] = now   # when this snapshot of the game was taken (a frozen game keeps its last pre-game time)
         game["markets"] = mk
@@ -672,14 +782,19 @@ def build(raw, prev=None, model=None, snaps=None):
                     if s.get("ev") is not None and s["ev"] >= EV_PICK and s.get("consensus"):
                         cands.append((s["ev"], game, m, s))
         cands.sort(key=lambda c: -c[0])
-        pro_c = [c for c in cands if c[1]["league"] not in COLLEGE]
+        # NBA/NFL slates: college picks never become the best bet. College slates (college.json): the college best bet,
+        # watch-only like every college pick
+        college_slate = all(x["league"] in COLLEGE for x in games)
+        pro_c = cands if college_slate else [c for c in cands if c[1]["league"] not in COLLEGE]
         best = None
         pslate = prev["slates"].get(date)
         if pslate and pslate.get("best"):
             best = pslate["best"]
-        elif pro_c and pro_c[0][0] >= EV_BEST:   # watch-only college picks are never the best bet
+        elif pro_c and pro_c[0][0] >= EV_BEST:
             ev, game, m, s = pro_c[0]
             best = {"gameId": game["id"], "market": m["type"], "side": s["key"], "label": s["label"], "score": s["score"], "ev": ev, "method": 3}
+            if college_slate:
+                best["watch"] = True
         for ev, game, m, s in cands:
             pid = f"{date}-{game['id']}-{m['type']}-{s['key']}"
             if pid in prev["pick_ids"]:

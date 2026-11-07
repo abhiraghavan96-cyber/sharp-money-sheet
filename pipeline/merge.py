@@ -202,6 +202,7 @@ def main():
             pass  # started or final: score.py freezes it from the previous slate
         r = {x: g[x] for x in ("league", "date", "id", "start", "away", "awayName", "home", "homeName")}
         r["neutral"] = bool(g.get("neutral"))
+        r["venue"] = {"name": g.get("venue"), "city": g.get("city"), "state": g.get("state"), "country": g.get("country")}
         if lg in COLLEGE:
             try:
                 college_fill(r, g, kc, kix, tickets_c, books_c, ctx_c)

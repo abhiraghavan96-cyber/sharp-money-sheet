@@ -16,10 +16,10 @@ Also writes out_dir/moves/<gameId>-<market>-<window>.json: the move model's trai
 """
 import json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from score import interp, imp, KALSHI_MAX_WIDTH, model_probs, at_line, MOVE_FEATS
+from score import interp, imp, KALSHI_MAX_WIDTH, model_probs, at_line, MOVE_FEATS, SHADOW_FEATS
 
-CALIB_SOURCES = ("cons", "dk", "kalshi", "espn", "power", "blend", "rating", "fair", "rest", "health", "wind")
-MOVES_COLS = ["date", "league", "market", "bucket", "hours", "y"] + MOVE_FEATS
+CALIB_SOURCES = ("cons", "dk", "kalshi", "espn", "power", "blend", "rating", "fair", "rest", "health", "wind") + tuple(SHADOW_FEATS)
+MOVES_COLS = ["date", "league", "market", "bucket", "hours", "y"] + MOVE_FEATS + SHADOW_FEATS
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SLOPE = {("NFL", "spread"): 0.03, ("NFL", "total"): 0.025, ("NBA", "spread"): 0.03, ("NBA", "total"): 0.02}
@@ -169,7 +169,7 @@ def moves(slates, out):
                     continue
                 pc = side["consensus"]["prob"] if side.get("consensus") else side["dkFair"]
                 y = at_line(pc, side["line"], snap["L"], mt, key, g["league"]) - snap["p"]
-                row = [date, g["league"], mt, b, snap["h"], round(y, 4)] + [snap["x"].get(f) for f in MOVE_FEATS]
+                row = [date, g["league"], mt, b, snap["h"], round(y, 4)] + [snap["x"].get(f) for f in MOVE_FEATS + SHADOW_FEATS]
                 json.dump(row, open(os.path.join(out, "moves", f"{g['id']}-{mt}-{b}.json"), "w"))
                 n += 1
     print("move rows", n)

@@ -94,7 +94,7 @@ def espn(dates, leagues=("nba", "nfl")):
                      "away": a["team"]["abbreviation"], "awayName": a["team"]["displayName"], "awayId": a["team"].get("id"),
                      "home": h["team"]["abbreviation"], "homeName": h["team"]["displayName"], "homeId": h["team"].get("id"),
                      "awayScore": float(a.get("score") or 0), "homeScore": float(h.get("score") or 0),
-                     "indoor": v.get("indoor"), "city": ad.get("city"), "state": ad.get("state"), "country": ad.get("country"),
+                     "indoor": v.get("indoor"), "city": ad.get("city"), "state": ad.get("state"), "country": ad.get("country"), "venue": v.get("fullName"),
                      "stype": (e.get("season") or {}).get("type"), "neutral": bool(c.get("neutralSite"))}
                 if lg in COLLEGE:   # names for matching other sources, whose college abbreviations often differ from ESPN's
                     for s, t in (("away", a["team"]), ("home", h["team"])):
@@ -143,7 +143,8 @@ def context(games):
             last = dates[-1] if dates else None
             last_ev = next((e for e in l5.get("events", []) if e.get("gameDate") == last), {})
             rec = next((r.get("summary") for r in c.get("record", []) if r.get("type") == "total"), None)
-            teams[c["homeAway"]] = {"ab": ab, "rec": rec, "last": last, "lastAtVs": last_ev.get("atVs"), "recent": dates,
+            teams[c["homeAway"]] = {"ab": ab, "rec": rec, "last": last, "lastAtVs": last_ev.get("atVs"),
+                                    "lastOpp": (last_ev.get("opponent") or {}).get("abbreviation"), "recent": dates,
                                     "out": out_[:6], "q": qq[:4], "lead": lead,
                                     "coreOut": [n for n in lead if n in out_], "coreQ": [n for n in lead if n in qq]}
             teams[c["homeAway"]].update(lost_production(lg, out_ath, lead))

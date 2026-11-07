@@ -19,7 +19,7 @@ import bisect, json, math, os, sys
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from score import (nv, at_line, clamp, _nd, SD_MARGIN, SD_TOTAL, MOVE_FEATS, MOVE_PRIOR, RESULT_FEATS, RESULT_PRIOR,  # noqa: E402
+from score import (nv, at_line, clamp, _nd, SD_MARGIN, SD_TOTAL, MOVE_FEATS, MOVE_PRIOR, RESULT_FEATS, RESULT_PRIOR, SHADOW_FEATS,  # noqa: E402
                    MOVE_N0, RESULT_N0, TAU_HOURS)
 
 HALF_LIFE = {"NBA": 30.0, "NFL": 56.0, "NCAAB": 45.0}   # days; older closing lines count half as much
@@ -217,7 +217,8 @@ def hist_rows(hist):
             else:
                 cache[key] = fit_ratings(games, lg, g["date"])
         rt = cache[key]
-        rp = rating_pred(rt, g) if rt else None
+        # NBA/NFL ratings can't see a neutral or international venue (Mexico City, London), so score.py leaves them out there
+        rp = rating_pred(rt, g) if rt and not (g.get("neutral") and lg in PRO) else None
         res_margin, res_total = g["hs"] - g["as"], g["hs"] + g["as"]
         if g.get("sp"):
             Lo, Lc, ch, ca, oh, oa = g["sp"]
@@ -272,7 +273,7 @@ def live_rows(calib, moves_live):
     cols = moves_live.get("cols") or []
     for r in (moves_live.get("rows") or {}).values():
         d = dict(zip(cols, r))
-        x = {k: d.get(k) for k in MOVE_FEATS if d.get(k)}
+        x = {k: d.get(k) for k in MOVE_FEATS + SHADOW_FEATS if d.get(k)}
         mv.append({"date": d["date"], "lg": d["league"], "m": d["market"], "src": "live", "y": d["y"], "x": x,
                    "tau": clamp((d.get("hours") or 0) / TAU_HOURS)})
     cols = calib.get("cols") or []
@@ -291,7 +292,7 @@ def live_rows(calib, moves_live):
             x["espn"] = clip(d["espn"] - base, 0.10)
         if d.get("rating") is not None:
             x["rating"] = clip(d["rating"] - base)
-        for k in ("rest", "health", "wind"):
+        for k in ("rest", "health", "wind") + tuple(SHADOW_FEATS):
             if d.get(k):
                 x[k] = d[k]
         rs.append({"date": d["date"], "lg": d["league"], "m": d["market"], "src": "live", "y": d["res"] - base, "x": x, "base": base})
@@ -360,6 +361,28 @@ def fit(rows, feats, prior, n0, scale_tau):
             "check": evaluate(rows, feats, prior, n0, scale_tau)}
 
 
+def variable_report(rows, feats, prior, n0, scale_tau, shadow=()):
+    """How much each variable earns, tested on the newest quarter of rows: for a variable in use, how much worse the
+    line-move prediction gets without it; for a shadow variable (tracked, not in the fair price), how much better it
+    would get with it. Positive = the variable helps."""
+    base = evaluate(rows, feats, prior, n0, scale_tau)
+    if not base or not base.get("mseModel"):
+        return None
+    m0, n, out = base["mseModel"], len(rows), {}
+    for f in list(feats) + list(shadow):
+        cov = sum(1 for r in rows if r["x"].get(f))
+        if not cov:
+            out[f] = {"kind": "shadow" if f in shadow else "in use", "coverage": 0.0, "help": None}
+            continue
+        alt = [x for x in feats if x != f] if f in feats else list(feats) + [f]
+        ev = evaluate(rows, alt, prior, n0, scale_tau)
+        if not ev or not ev.get("mseModel"):
+            continue
+        help_ = ev["mseModel"] / m0 - 1 if f in feats else 1 - ev["mseModel"] / m0
+        out[f] = {"kind": "shadow" if f in shadow else "in use", "coverage": round(cov / n, 3), "rows": cov, "help": round(help_, 4)}
+    return {"rows": n, "from": base["from"], "skill": base["skillVsZero"], "vars": out}
+
+
 def load(path, default):
     try:
         with open(path) as f:
@@ -411,7 +434,12 @@ def main():
         cm = fit([r for r in hmv + cmv if r["lg"] == lg], MOVE_FEATS, MOVE_PRIOR, MOVE_N0, True)
         cr = fit([r for r in hrs + crs if r["lg"] == lg], RESULT_FEATS, RESULT_PRIOR, RESULT_N0, False)
         college[lg] = {"move": dict(cm, prior=MOVE_PRIOR, n0=MOVE_N0), "result": dict(cr, prior=RESULT_PRIOR, n0=RESULT_N0)}
-    model = {"version": 3, "fittedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "asof": today,
+    # variable report: which inputs earn their place, and whether the shadow variables would
+    variables = {"pro": variable_report([r for r in hmv + lmv if r["lg"] in PRO], MOVE_FEATS, MOVE_PRIOR, MOVE_N0, True, SHADOW_FEATS)}
+    for lg in college:
+        recent = sorted([r for r in hmv + cmv if r["lg"] == lg], key=lambda r: r["date"])[-4000:]   # keeps the nightly run quick
+        variables[lg] = variable_report(recent, MOVE_FEATS, MOVE_PRIOR, MOVE_N0, True, SHADOW_FEATS)
+    model = {"version": 3, "fittedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "asof": today, "variables": variables,
              "ratings": ratings, "ratingCheck": rating_check,
              "move": dict(move, prior=MOVE_PRIOR, n0=MOVE_N0), "result": dict(result, prior=RESULT_PRIOR, n0=RESULT_N0),
              "college": college}
@@ -423,6 +451,8 @@ def main():
     print("result coef", result["coef"])
     print("result check", result["check"])
     print("rating check", rating_check)
+    for k, v in variables.items():
+        print("variables", k, json.dumps(v))
     for lg, c in college.items():
         print("college", lg, "| move rows", c["move"]["n"], c["move"]["bySource"], "coef", c["move"]["coef"], "check", c["move"]["check"])
         print("college", lg, "| result rows", c["result"]["n"], c["result"]["bySource"], "coef", c["result"]["coef"], "check", c["result"]["check"])

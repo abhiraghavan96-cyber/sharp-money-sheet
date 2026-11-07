@@ -108,8 +108,8 @@ RESULTS_DAYS = 14
 SNAPS_DAYS = 4   # snapshots are turned into move rows the first night a game is graded
 MOVES_DAYS = 240
 sys.path.insert(0, HERE)
-from score import MOVE_FEATS  # noqa: E402
-MOVES_COLS = ["date", "league", "market", "bucket", "hours", "y"] + MOVE_FEATS
+from score import MOVE_FEATS, SHADOW_FEATS  # noqa: E402
+MOVES_COLS = ["date", "league", "market", "bucket", "hours", "y"] + MOVE_FEATS + SHADOW_FEATS
 
 
 def read_json(path, default):
@@ -167,7 +167,7 @@ def update_table(name, cols, src, now, days):
     print(name, len(rows), "rows,", n, "from this run")
 CLOSED_DAYS = 5
 CALIB_DAYS = 365
-CALIB_COLS = ["date", "league", "market", "line", "res", "cons", "dk", "kalshi", "espn", "power", "blend", "rating", "fair", "rest", "health", "wind"]
+CALIB_COLS = ["date", "league", "market", "line", "res", "cons", "dk", "kalshi", "espn", "power", "blend", "rating", "fair", "rest", "health", "wind"] + SHADOW_FEATS
 
 
 def closed_ladders(now):
