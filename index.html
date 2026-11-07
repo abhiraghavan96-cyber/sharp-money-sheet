@@ -756,6 +756,8 @@ function teamHits(txt, raw, games) {
   }
   return hits;
 }
+const STATWORD = /^(points?|pts|rebounds?|rebs?|boards|assists?|asts?|dimes|threes?|treys?|3s|3pm|pra|passing|pass|rushing|rush|receiving|rec|receptions?|catches|yards?|yds|ml|moneyline|plus|to)$/;
+const NOT_FIRST = new Set(["over", "under", "the", "for", "and", "will", "can", "does", "is", "if", "at", "to", "o", "u", "a", "an", "with", "has", "get", "gets", "score", "scores", "plus", "or", "than", "less", "more", "fewer"]);
 function playerHits(txt, started) {
   const now = Date.now(), seen = new Map();
   let t = txt;
@@ -765,10 +767,27 @@ function playerHits(txt, started) {
     const n = fold(p.name).replace(/[^a-z \-]/g, ""), parts = n.split(/[\s]+/), last = parts.slice(-1)[0], first = parts[0];
     let sc = 0;
     if (t.includes(n)) sc = 10; else if (parts.length > 1 && hasWord(t, last) && last.length > 2) sc = 6; else if (hasWord(t, first) && first.length > 2) sc = 3;
+    if (sc === 6) {   // "Josh Allen" shouldn't land on Keenan Allen: a different first name right before the last name rules him out
+      const before = (t.match(new RegExp(`([a-z]+)\\s+${last.replace(/[^a-z]/g, "")}\\b`)) || [])[1];
+      if (before && before.length > 1 && before !== first && !NOT_FIRST.has(before)) sc = 0;
+    }
     if (sc && (!seen.has(p.id) || seen.get(p.id).sc < sc)) seen.set(p.id, { p, sc });
   }
-  const list = [...seen.values()].sort((a, b) => b.sc - a.sc);
-  return list.filter(x => x.sc === (list[0] || {}).sc);
+  let list = [...seen.values()].sort((a, b) => b.sc - a.sc);
+  if (list.length && list[0].sc === 3) {   // "Josh Allen" with no Josh Allen on the board: don't fall back to every Josh
+    list = list.filter(x => {
+      const first = fold(x.p.name).split(/\s+/)[0], nxt = (t.match(new RegExp(`\\b${first.replace(/[^a-z]/g, "")}\\s+([a-z]+)`)) || [])[1];
+      return !nxt || STATWORD.test(nxt) || NOT_FIRST.has(nxt);
+    });
+  }
+  const tied = list.filter(x => x.sc === (list[0] || {}).sc);
+  if (tied.length > 1) {   // "Luka" means the star, not the backup: break ties by role when one player clearly stands out
+    const role = p => { const r = (p.cur && p.cur.length ? p.cur : p.prev || []).slice(0, 15); if (!r.length) return 0;
+      const a = i => r.reduce((s, x) => s + (x[i] || 0), 0) / r.length; return p.lg === "NBA" ? a(0) + a(1) : a(0) + a(1) + a(2); };
+    const ranked = tied.map(x => ({ ...x, r: role(x.p) + (Object.keys(x.p.ladders || {}).length ? 5 : 0) })).sort((a, b) => b.r - a.r);
+    if (ranked[0].r >= 1.5 * Math.max(1, ranked[1].r)) return [ranked[0]];
+  }
+  return tied;
 }
 
 /* parse a question into a bet */
@@ -793,6 +812,7 @@ function parseBet(q) {
     const p = pl[0].p;
     if (!stat || stat === "yds") stat = p.lg === "NFL" ? (p.pos === "QB" ? "passYds" : p.pos === "RB" ? "rushYds" : "recYds") : (stat === "yds" ? null : "pts");
     if (!stat || STATS[stat][1] !== p.lg) return { error: "stat", q: raw, p };
+    if (stat === "passYds" && p.pos && p.pos !== "QB") return { error: "notQB", q: raw, p };
     Object.assign(bet, { kind: "prop", p, stat });
     let n;
     if ((n = num(/(\d+(?:\.\d+)?)\s*\+/)) != null) { bet.dir = "over"; bet.line = Number.isInteger(n) ? n - 0.5 : n; }
@@ -1088,7 +1108,7 @@ function renderTestResult(res) {
     const msg = {
       player: "That player isn't on a roster for any game in the next three days, or isn't a regular part of his team's rotation, so there's no game log loaded for him.",
       started: `${res.g ? `${esc(res.g.away)} at ${esc(res.g.home)}` : "That game"} has already started${res.who ? ` (${esc(res.who)})` : ""}, so there's nothing left to simulate. Test a bet covers games that haven't begun, up to three days ahead.`,
-      whichTotal: `More than one game has that total: ${(res.options || []).map(g => `${esc(g.away)}–${esc(g.home)}`).join(", ")}. Add a team, like "${res.options && res.options[0] ? esc(res.options[0].home) : "LAL"} over ${esc(res.q.replace(/\D+/, ""))}".`,
+      whichTotal: `More than one game has that total: ${(res.options || []).map(g => `${esc(g.away)}–${esc(g.home)}`).join(", ")}. Add a team, like "${res.options && res.options[0] ? esc(res.options[0].home) : "LAL"} over ${esc(String(res.q || "").replace(/\D+/, ""))}".`,
       unsupported: "The sheet covers points, rebounds, assists, threes and PRA in the NBA, and passing, rushing and receiving yards and receptions in the NFL. That stat isn't one of them yet.",
       ambiguous: `More than one player matches: ${(res.options || []).map(p => esc(p.name)).join(", ")}. Add a last name.`,
       stat: res.p ? `Which stat for ${esc(res.p.name)}? Try points, rebounds, assists, threes or PRA${res.p.lg === "NFL" ? ", or passing, rushing or receiving yards, or receptions" : ""}.` : "Which stat?",
@@ -1096,7 +1116,8 @@ function renderTestResult(res) {
       none: "I couldn't tell which team or player you mean. Use a team or player from a game in the next three days, like the examples above.",
       nolines: "That game has no posted line yet, so there's nothing to simulate against.",
       side: "Both teams are named. Say which side, like \"LAL -2.5\", or ask for the over or under.",
-      thin: "There aren't enough games on record for that player to simulate."
+      notQB: `${res.p ? `${esc(res.p.name)} is a ${esc(res.p.pos || "non-quarterback")}` : "That player isn't a quarterback"}, and no quarterback by that name plays in the next three days.`,
+      thin: `There aren't enough games on record for ${res.p ? esc(res.p.name) : "that player"} to simulate.`
     }[res.error] || "That one didn't parse.";
     return `<div class="note">${msg}</div>`;
   }
