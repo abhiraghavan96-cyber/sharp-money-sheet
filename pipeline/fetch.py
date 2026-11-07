@@ -392,9 +392,9 @@ def props(games, codes, stand):
             if not side or not g.get(side + "Id"):
                 continue
             tid = g[side + "Id"]
-            if tid not in rosters:
-                rosters[tid] = roster(lg, tid)
-            ath = match_player(info["name"], rosters[tid], pcode)
+            if (lg, tid) not in rosters:   # NBA and NFL team ids overlap, so key by league too
+                rosters[(lg, tid)] = roster(lg, tid)
+            ath = match_player(info["name"], rosters[(lg, tid)], pcode)
             if not ath:
                 print("prop player not matched", LG, info["name"], pcode)
                 continue
@@ -409,10 +409,10 @@ def props(games, codes, stand):
                 tid = g.get(side + "Id")
                 if not tid:
                     continue
-                if tid not in rosters:
-                    rosters[tid] = roster(lg, tid)
+                if (lg, tid) not in rosters:
+                    rosters[(lg, tid)] = roster(lg, tid)
                 other = "home" if side == "away" else "away"
-                for ath in rosters[tid]:
+                for ath in rosters[(lg, tid)]:
                     if not ath.get("id") or (g["id"], ath["id"]) in listed or (ath.get("status") or "") in SKIP_STATUS:
                         continue
                     if LG in ROSTER_POS and ath.get("pos") not in ROSTER_POS[LG]:
