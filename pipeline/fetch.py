@@ -348,9 +348,33 @@ def kalshi_props(lg, codes):
     return res
 
 
+ROSTER_POS = {"NFL": {"QB", "RB", "WR", "TE"}}
+SKIP_STATUS = {"Out", "Injured Reserve", "Suspension", "Suspended"}
+
+
+def keep_rotation(lg, cur, prev):
+    """A roster player worth simulating: a regular part of the rotation (or, with no games yet this season, last season)."""
+    def avg(rows, i):
+        return sum(r[i] or 0 for r in rows) / len(rows) if rows else 0
+    if lg == "NBA":
+        return (len(cur) >= 2 and avg(cur, 0) >= 12) or (len(cur) < 2 and len(prev) >= 20 and avg(prev, 0) >= 20)
+    rows = cur if len(cur) >= 2 else prev
+    return len(rows) >= 2 and max(avg(rows, 0), avg(rows, 1) + avg(rows, 2)) >= 15
+
+
 def props(games, codes, stand):
-    """Players with Kalshi prop markets in tonight's and tomorrow's games, with their game logs."""
+    """Players for every scheduled game in the window, with their game logs: everyone Kalshi lists a prop for, plus the
+    rest of each team's rotation, so any regular can be simulated before (or without) a Kalshi market. Game logs are
+    reused from the previous props.json when they were fetched earlier the same day (they only change after games)."""
     players, rosters = [], {}
+    today = datetime.now(PT).strftime("%Y-%m-%d")
+    cache = {}
+    try:
+        for p in json.load(open(os.path.join(ROOT, "props.json"))).get("players") or []:
+            if p.get("logAsOf") == today and (p.get("cur") or p.get("prev")):
+                cache[(p["lg"], p["id"])] = (p.get("cur") or [], p.get("prev") or [])
+    except Exception:  # noqa: BLE001
+        pass
     for lg in ("nba", "nfl"):
         LG = lg.upper()
         sched = [g for g in games if g["league"] == LG and g["status"] == "STATUS_SCHEDULED"]
@@ -378,12 +402,44 @@ def props(games, codes, stand):
             players.append({"id": ath["id"], "name": ath["name"], "lg": LG, "team": g[side], "opp": g[other],
                             "home": side == "home", "gameId": g["id"], "date": g["date"], "start": g["start"],
                             "pos": ath["pos"], "status": ath["status"], "ladders": info["ladders"]})
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        cur = list(ex.map(lambda p: gamelog(p["lg"].lower(), p["id"]), players))
-        prev = list(ex.map(lambda p: gamelog(p["lg"].lower(), p["id"], prev=True), players))
-    for p, c, pv in zip(players, cur, prev):
-        p["cur"], p["prev"] = c, pv[:60]
-    players = [p for p in players if p["cur"] or p["prev"]]
+        # the rest of each rotation, no Kalshi market needed
+        listed = {(p["gameId"], p["id"]) for p in players}
+        for g in sched:
+            for side in ("away", "home"):
+                tid = g.get(side + "Id")
+                if not tid:
+                    continue
+                if tid not in rosters:
+                    rosters[tid] = roster(lg, tid)
+                other = "home" if side == "away" else "away"
+                for ath in rosters[tid]:
+                    if not ath.get("id") or (g["id"], ath["id"]) in listed or (ath.get("status") or "") in SKIP_STATUS:
+                        continue
+                    if LG in ROSTER_POS and ath.get("pos") not in ROSTER_POS[LG]:
+                        continue
+                    listed.add((g["id"], ath["id"]))
+                    players.append({"id": ath["id"], "name": ath["name"], "lg": LG, "team": g[side], "opp": g[other],
+                                    "home": side == "home", "gameId": g["id"], "date": g["date"], "start": g["start"],
+                                    "pos": ath["pos"], "status": ath["status"], "ladders": {}, "rosterOnly": True})
+    need = [p for p in players if (p["lg"], p["id"]) not in cache]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        cur = dict(zip([p["id"] for p in need], ex.map(lambda p: gamelog(p["lg"].lower(), p["id"]), need)))
+    for p in players:
+        c = cache.get((p["lg"], p["id"]))
+        p["cur"] = c[0] if c else cur.get(p["id"], [])
+    # last season only for players who make the cut (it's the slow part)
+    def wanted(p):
+        return not p.get("rosterOnly") or keep_rotation(p["lg"], p["cur"], [])  or len(p["cur"]) < 2
+    need_prev = [p for p in players if (p["lg"], p["id"]) not in cache and wanted(p)]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        prev = dict(zip([p["id"] for p in need_prev], ex.map(lambda p: gamelog(p["lg"].lower(), p["id"], prev=True), need_prev)))
+    for p in players:
+        c = cache.get((p["lg"], p["id"]))
+        p["prev"] = (c[1] if c else prev.get(p["id"], []))[:60 if not p.get("rosterOnly") else 40]
+        p["logAsOf"] = today
+    players = [p for p in players if (p["cur"] or p["prev"]) and (not p.get("rosterOnly") or keep_rotation(p["lg"], p["cur"], p["prev"]))]
+    print("prop players: Kalshi-listed", sum(1 for p in players if not p.get("rosterOnly")), "| rotation only", sum(1 for p in players if p.get("rosterOnly")),
+          "| logs fetched", len(need), "+", len(need_prev), "| reused", sum(1 for p in players if (p["lg"], p["id"]) in cache))
     lg_avg = {LG: round(sum(t["pf"] for t in st.values()) / len(st), 2) for LG, st in stand.items() if st}
     return {"cols": {"NBA": ["min", "pts", "reb", "ast", "tpm"], "NFL": ["passYds", "rushYds", "recYds", "rec"]},
             "players": players, "teams": stand, "lgAvg": lg_avg}
@@ -699,7 +755,8 @@ def main():
         backfill(d)
         return
     today = datetime.now(PT).date()
-    days = [today - timedelta(days=1), today] if mode == "grade" else [today, today + timedelta(days=1)]
+    # refresh looks three days ahead so Sunday's NFL games are on the board (and testable) from Friday
+    days = [today - timedelta(days=1), today] if mode == "grade" else [today + timedelta(days=i) for i in range(3)]
     games = espn([x.strftime("%Y%m%d") for x in days])
     json.dump(games, open(os.path.join(d, "espn.json"), "w"))
     print("espn games", len(games))
