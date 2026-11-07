@@ -485,10 +485,20 @@ def market_features(g, m, now, model):
             "ratingProb": None if rp is None else round(rp, 4), "ratingLine": rl}
 
 
+def model_active(part):
+    chk = (part or {}).get("check")
+    return not chk or chk.get("skillVsZero") is None or chk["skillVsZero"] > 0
+
+
 def fair_eval(feat, model):
     """Fair chance for the home side / the over, with each input's contribution in probability points."""
     mv = ((model or {}).get("move") or {}).get("coef") or MOVE_PRIOR
     rs = ((model or {}).get("result") or {}).get("coef") or RESULT_PRIOR
+    # a fitted model that can't beat "no adjustment" on the games it never saw is switched off
+    if not model_active((model or {}).get("move")):
+        mv = {}
+    if not model_active((model or {}).get("result")):
+        rs = {}
     tau = clamp(feat["h"] / TAU_HOURS)
     x = feat["x"]
     move = tau * sum(mv.get(k, 0.0) * x.get(k, 0.0) for k in MOVE_FEATS)
