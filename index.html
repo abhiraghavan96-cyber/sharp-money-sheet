@@ -353,6 +353,26 @@ function sigBars(sd) {
     return `<div class="sig"><span class="name">${name}</span><span class="track"><i class="${kind === "s" ? "sit" : ""}" style="width:${(100 * v / max).toFixed(0)}%"></i></span><span class="pts">${v ? "+" + Math.round(v) : "0"}</span></div>`;
   }).join("");
 }
+function fairReasons(g, m, sd) {
+  const out = [], c = sd.contrib || {}, pts = v => (Math.abs(v) * 100).toFixed(1), rl = g.ratingLine, tot = m.type === "total";
+  const big = Object.entries(c).filter(([, v]) => Math.abs(v) >= 0.002).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+  for (const [k, v] of big) {
+    const toward = v > 0;
+    if (k === "rating" && rl) {
+      if (tot && rl.total != null) out.push(`This season's closing lines rate this matchup at ${rl.total.toFixed(1)} total points, ${Math.abs(rl.total - sd.line).toFixed(1)} ${rl.total > sd.line ? "above" : "below"} the current ${sd.line}. Lines have tended to move toward that rating before games (${toward ? "+" : "−"}${pts(v)} points).`);
+      else if (!tot) { const fair = -rl.margin, hl = (m.sides.find(x => x.key === "home") || {}).line; out.push(`This season's closing lines rate this matchup ${g.home} ${fmtLine(Math.round(fair * 2) / 2)}, against ${g.home} ${fmtLine(hl)} now. Lines have tended to move toward that rating before games (${toward ? "+" : "−"}${pts(v)} points).`); }
+    } else if (k === "kalshi") out.push(`Kalshi prices this side at ${pct(sd.kalshiProb, 1)} against the books' ${pct(sd.fairNow, 1)} (${toward ? "+" : "−"}${pts(v)} points).`);
+    else if (k === "dk") out.push(`DraftKings is out of line with the other books here (${toward ? "+" : "−"}${pts(v)} points).`);
+    else if (k === "espn") out.push(`ESPN's model leans ${toward ? "this way" : "the other way"} (${toward ? "+" : "−"}${pts(v)} points).`);
+    else if (k === "public") out.push(`${sd.tickets}% of bets are on this side (${toward ? "+" : "−"}${pts(v)} points).`);
+    else if (k === "move") out.push(`The line has moved ${toward ? "toward" : "away from"} this side since it opened (${toward ? "+" : "−"}${pts(v)} points).`);
+    else if (k === "home" || k === "over") out.push(`This season, ${k === "home" ? "home sides" : "totals"} have tended to drift ${k === "home" ? (v * (sd.key === "home" ? 1 : -1) > 0 ? "toward the home team" : "toward the road team") : (v * (sd.key === "over" ? 1 : -1) > 0 ? "up" : "down")} before games (${toward ? "+" : "−"}${pts(v)} points).`);
+    else out.push(`${CONTRIB[k] || k}: ${toward ? "+" : "−"}${pts(v)} points.`);
+  }
+  if (sd.best && sd.best.venue !== "DraftKings" && sd.best.breakEven < sd.dkBreakEven - 0.0005) out.push(`${sd.best.venue === "Kalshi" ? "Kalshi" : sd.best.venue} is the best price, ${pts(sd.dkBreakEven - sd.best.breakEven)} points cheaper than DraftKings.`);
+  if (sd.newsMove || m.news) out.push(`The line moved enough to suggest news; the move so far is left out of the fair price.`);
+  return out.slice(0, 5);
+}
 function reasons(g, m, sd) {
   const out = [], sg = sd.signals || {}, si = sd.situation || {};
   if (sg.rlm > 0) out.push(`Line moved ${Math.abs(sd.move)} toward this side while only ${sd.tickets}% of bets were on it.`);
@@ -382,7 +402,7 @@ function renderBest(s, g) {
   const others = Object.values(state.data.picks || {}).filter(p => p.date === s.date && !p.isBest).sort((a, b) => (b.ev ?? b.score / 1000) - (a.ev ?? a.score / 1000)).slice(0, 4);
   if (!s.best || !g) return `<div class="pass"><span class="eyebrow"><span class="tag">Best bet</span></span><h3 style="font-size:34px">Pass</h3><p class="muted">No side's best available price beats its fair price by 2.5% or more. No edge, no bet. Most days should look like this.</p></div>`;
   const m = g.markets.find(x => x.type === s.best.market), sd = m.sides.find(x => x.key === s.best.side);
-  const r = reasons(g, m, sd), note = g.note;
+  const r = sd.ev != null ? fairReasons(g, m, sd) : reasons(g, m, sd), note = g.note;
   return `<article class="best" aria-label="Best bet">
     <div class="best-top"><div>
       <div class="eyebrow"><span class="tag">Best bet</span><span class="chip">Paper</span><span class="chip">${g.league} · ${dayFmt(s.date, { weekday: "short" })} ${timeFmt(g.start)} PT</span>${s.best.method !== 3 ? `<span class="chip" title="Chosen before the fair-price method started on Nov 7">Old signal-score pick${sd.ev != null && sd.ev < EV_BEST ? "; the fair-price method would pass" : ""}</span>` : ""}</div>
@@ -392,7 +412,7 @@ function renderBest(s, g) {
     <div class="case">
       ${sd.ev != null ? `<div class="sig-list"><span class="label">Fair price · books ${pct(sd.fairNow, 1)} → fair ${pct(sd.fair, 1)} (points)</span>${contribBars(sd)}</div>`
         : `<div class="sig-list"><span class="label">The case · market ${sd.marketScore}${sd.situationScore != null ? ` · situation ${sd.situationScore}` : ""}</span>${sigBars(sd)}</div>`}
-      <div class="why"><span class="label">Why</span><ul>${r.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>
+      ${r.length ? `<div class="why"><span class="label">Why</span><ul>${r.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}
     </div>
     ${note ? `<div class="read"><span class="label">${note.auto ? "Auto read" : "Analyst read"}</span><p>${esc(note.read)}</p>${note.watch ? `<p class="watch">What would change it: ${esc(note.watch)}</p>` : ""}</div>` : ""}
     ${priceBox(sd)}
